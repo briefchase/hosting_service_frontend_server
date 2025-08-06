@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Login - Host Control</title>
+    <!-- Link the shared stylesheet -->
+    <link rel="stylesheet" href="/static/style.css">
+    <meta name="theme-color" content="#000"/>
+    <!-- Load Google Identity Services (GIS) Library -->
+    <script src="https://accounts.google.com/gsi/client" async defer></script>
+
+    <!-- Removed inline <style> block -->
+
+</head>
+    <div id="login-view-container">
+        <div id="login-status-message" class="status-message"></div>
+        <div id="about-button" class="login-option about-option">about</div>
+        <div id="console-button" class="login-option">console</div>
+    </div>
+    <div class="legal-links">
+        <a href="/privacy">Privacy Policy</a>&nbsp;<a href="/tos">Terms of Service</a>
+    </div>
+    <!-- Link the external login page script -->

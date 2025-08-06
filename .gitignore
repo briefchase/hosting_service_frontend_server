@@ -1,0 +1,30 @@
+# Secrets and Config
+config.json
+sa-key.json
+app/traefik/acme.json
+app/traefik/traefik.toml
+app/traefik/dynamic/force-https.toml
+app/.env
+app/gcr-key.json
+
+# Terraform state, variables, and working directory
+.terraform/
+terraform.tfstate
+terraform.tfstate.backup
+terraform.tfvars
+tfplan
+
+# Keys
+terraform/id_rsa
+
+# Backups
+backup/
+*.tar.gz
+
+# Python cache
+app/__pycache__/
+*.pyc
+
+# OS-specific files
+.DS_Store
+Thumbs.db

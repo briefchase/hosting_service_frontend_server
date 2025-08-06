@@ -1,0 +1,7 @@
+# LAMP SERVER FOR HOSTING SERVICE FRONTEND
+
+## USAGE:
+
+```bash
+./go.sh
+```

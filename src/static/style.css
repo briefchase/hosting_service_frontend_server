@@ -1,0 +1,614 @@
+/* Global Resets & Base Styles */
+body {
+    background-color: black;
+    color: white;
+    font-family: 'Courier New', Courier, monospace;
+    margin: 0;
+    padding: 0;
+    height: 100vh; /* Ensure body takes full height */
+    display: flex; /* Use flexbox for overall layout */
+    flex-direction: column; /* Stack header and content vertically */
+}
+
+/* Login Page Specific Styles (If landing.html is ever used directly) */
+.login-page body { /* Less relevant now, but kept for potential direct use */
+    justify-content: center;
+    align-items: center;
+    text-align: center;
+}
+
+.login-page #login-content {
+    position: relative;
+}
+
+.login-page .login-button-container {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+}
+
+.login-page .login-button {
+    cursor: pointer;
+    padding: 10px;
+    display: block;
+    border: 1px solid white;
+    margin-bottom: 5px;
+    min-width: 200px;
+    text-align: left;
+    transition: background-color 0.3s, color 0.3s;
+    background-color: black;
+    color: white;
+}
+
+.login-page .login-button:hover {
+    background-color: white;
+    color: black;
+}
+
+.login-page #login-status-message {
+    position: absolute;
+    bottom: 20px;
+    left: 0;
+    right: 0;
+    text-align: center;
+    min-height: 1.2em;
+    padding: 5px;
+    color: white;
+}
+
+.login-page #login-status-message p {
+    margin: 0;
+}
+
+/* Main App Styles */
+.main-app #console-container {
+    flex-grow: 1; /* Allow console to fill remaining space */
+    position: relative; /* Context for absolute header */
+    display: flex;
+    flex-direction: column; /* Stack header and dynamic content */
+    align-items: center; /* Center flex children (login/menu container) horizontally */
+    padding-top: 80px; /* Add padding to prevent content going under fixed header */
+    box-sizing: border-box;
+}
+
+.main-app #header-container {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 20px 80px; /* Increased padding to keep buttons away from edge */
+    min-height: 40px; /* Adjusted min-height */
+    /* removed border-bottom: 1px solid white; */
+    position: fixed; /* Make header fixed at the top */
+    top: 0;
+    left: 0;
+    background-color: black; /* Ensure header has background */
+    z-index: 100; /* Keep header above other content */
+    display: flex; /* Use flex for alignment inside header */
+    align-items: center; /* Center items vertically */
+    justify-content: center; /* Center site title */
+}
+
+.main-app #site-title {
+    /* No longer need absolute positioning within flex header */
+    /* transform: translateX(-50%); removed */
+}
+
+/* Dynamic Content Containers (Login/Menu) */
+/* Style the containers loaded into #console-container */
+.main-app #login-view-container,
+.main-app #menu-container { /* Apply common styles */
+    display: flex;
+    flex-direction: column;
+    /* align-items: center; Removed - Parent handles container centering */
+    justify-content: center; /* Center items vertically (optional) */
+    width: 100%; /* Default width, overridden below */
+    flex-grow: 1; /* Allow content to fill space below header */
+    padding: 20px;
+    box-sizing: border-box;
+    /* Removed align-items: center; from here */
+}
+
+/* Specific styles for login container */
+.main-app #login-view-container {
+    width: 220px; /* Set specific width */
+    align-items: flex-start; /* Left-align ITEMS INSIDE the container */
+    /* justify-content remains center to vertically center the box */
+}
+
+/* Specific styles for menu container */
+.main-app #menu-container {
+    width: 220px; /* Match width */
+    align-items: center; /* Center ITEMS INSIDE the container */
+}
+
+/* Center Login Buttons */
+.main-app #login-view-container .login-button {
+    cursor: pointer;
+    padding: 10px;
+    border: 1px solid white;
+    margin-bottom: 10px; /* Increased spacing */
+    min-width: 220px; /* Slightly wider */
+    width: fit-content;
+    text-align: center; /* Center text inside button */
+    transition: background-color 0.3s, color 0.3s;
+    background-color: black;
+    color: white;
+}
+
+.main-app #login-view-container .login-button:hover {
+    background-color: white;
+    color: black;
+}
+
+/* Style Login Options as Records with Hover Effect - Updated */
+.main-app #login-view-container .login-option {
+    padding: 5px 10px; /* Reduced vertical padding, added horizontal */
+    margin-bottom: 5px; /* Spacing */
+    /* min-width: 220px; Removed */
+    width: fit-content; /* Make width fit content */
+    text-align: left; /* Left-align text inside */
+    cursor: pointer; /* Keep pointer cursor as they are clickable */
+    color: white; /* Default text color */
+    background-color: transparent; /* Ensure default background is transparent */
+    transition: background-color 0.3s, color 0.3s;
+}
+
+/* Restore button-like hover */
+.main-app #login-view-container .login-option:hover {
+    background-color: white; /* White background on hover */
+    color: black; /* Black text on hover */
+    /* text-decoration: none; Ensure no underline */
+}
+
+/* Status Message Styling */
+.main-app #login-view-container #login-status-message {
+    min-height: 1.2em;
+    padding: 5px;
+    color: white; /* Default color */
+    margin-bottom: 15px;
+    text-align: center;
+    width: 100%; /* Take full width for centering */
+}
+
+.main-app #login-view-container #login-status-message p {
+    margin: 0;
+}
+
+/* Legal Links Styling */
+.legal-links {
+    text-align: center;
+    margin-top: 20px; /* Space above the links */
+    font-size: 0.8em; /* Smaller font size */
+}
+
+.legal-links a {
+    color: #aaa; /* Dimmed color */
+    text-decoration: none;
+    transition: color 0.3s;
+}
+
+.legal-links a:hover {
+    color: white; /* Brighten on hover */
+}
+
+
+/* Global Corner Buttons */
+.back-button,
+.account-button { /* Now target the specific elements in main app */
+    position: absolute; /* Position relative to header */
+    top: 50%; /* Align vertically */
+    transform: translateY(-50%); /* Precise vertical center */
+    z-index: 10; /* Above site title if overlapping */
+    cursor: pointer;
+    padding: 5px 10px;
+    display: inline-block;
+    transition: background-color 0.3s, color 0.3s;
+    background-color: transparent; /* Make background transparent */
+    color: white;
+    /* border: 1px solid white; removed */
+}
+
+.back-button {
+    left: 20px;
+}
+
+.account-button {
+    right: 20px;
+}
+
+.back-button:hover,
+.account-button:hover {
+    background-color: white;
+    color: black;
+}
+
+
+/* Main App Menu Title Styling */
+.main-app #menu-text {
+    text-align: center;
+    margin-bottom: 15px; /* Space above menu list */
+}
+
+/* Main App Menu List Styles */
+.main-app .menu { /* Directly within menu-container */
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    width: 220px; /* Keep fixed width for the container */
+    display: flex;
+    flex-direction: column;
+    align-items: center; /* Center items like fit-content records */
+}
+
+/* Base styles for ALL list items (buttons and records) */
+.main-app .menu li {
+    /* width: 100%; Removed - Apply only to buttons */
+    box-sizing: border-box;
+    text-align: center;
+    transition: background-color 0.3s, color 0.3s;
+    padding: 0; /* Reset padding */
+    border: none;
+    margin-bottom: 5px; /* Consistent spacing below items */
+}
+
+/* Styles specific to Buttons */
+.main-app .menu li.menu-button {
+    width: 100%; /* Make buttons take full width */
+    padding: 10px 0; /* Button vertical padding */
+    border: 1px solid white;
+    /* margin-bottom: 5px; Moved to base li */
+    cursor: pointer;
+}
+
+/* Styles specific to Records */
+.main-app .menu li.menu-record {
+    width: fit-content; /* Make records fit their text */
+    padding: 2px 10px; /* Minimal vertical, some horizontal padding */
+    /* margin-bottom: 0; Use base li margin */
+    cursor: default;
+    color: #aaa; /* Keep records slightly dimmed */
+}
+
+/* Hover effect only for Buttons */
+.main-app .menu li.menu-button:hover {
+    background-color: white;
+    color: black;
+}
+
+/* Remove generic hover for records or other li elements if it existed */
+/*
+.main-app .menu li.menu-record:hover {
+    background-color: white;
+    color: black;
+}
+*/
+
+/* Main App General Container (was .container) - Use if needed */
+.main-app .container {
+     margin: 0 auto;
+     width: fit-content;
+     /* color: black; Removed, inherits white from body */
+}
+
+/* Main App Menu Styles */
+.main-app .menu {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    width: 200px;
+}
+
+.main-app .menu li {
+    text-align: center;
+    transition: background-color 0.3s, color 0.3s;
+    padding: 0;
+    border: none;
+    margin-bottom: 0;
+}
+
+.main-app .menu li.menu-button {
+    padding: 10px 0;
+    border: 1px solid white;
+    margin-bottom: 5px;
+    cursor: pointer;
+}
+
+.main-app .menu li.menu-record {
+    padding: 2px 0;
+    margin-bottom: 0;
+    cursor: default;
+}
+
+.main-app .menu li.menu-button:hover,
+.main-app .menu li.menu-record:hover {
+    background-color: white;
+    color: black;
+}
+
+/* Submenu display is controlled by menu.js */
+#deploy-submenu { /* Keep ID selector if specific */
+    /* display: none; */ /* Handled by JS */
+}
+
+/* Tooltip Styles */
+#tooltip {
+    display: none; /* Hidden by default */
+    position: absolute; /* Position near the mouse */
+    background-color: white;
+    color: black;
+    border: 1px solid black;
+    padding: 5px 8px;
+    font-size: 0.8em; /* Slightly smaller font */
+    max-width: 100px;
+    z-index: 1000; /* Ensure it's on top */
+    pointer-events: none; /* Prevent tooltip from interfering with mouse events */
+    box-shadow: 2px 2px 5px rgba(0,0,0,0.2); /* Optional: subtle shadow */
+}
+
+/* Utility class to hide elements */
+.hidden {
+    display: none !important;
+}
+
+/* Hide menu status message when empty */
+#menu-status-message:empty {
+    display: none;
+}
+
+/* Loading GIF styles */
+.loading-gif {
+    display: block;
+    margin: 40px auto; /* Add some top margin and center it horizontally */
+    width: 150px;      /* Set a reasonable width */
+    height: auto;      /* Maintain aspect ratio */
+}
+
+/* Rainbow text animation */
+.rainbow-text {
+    animation: rainbow-cycle 2s linear infinite;
+}
+
+@keyframes rainbow-cycle {
+    0%   { color: red; }
+    15%  { color: orange; }
+    30%  { color: yellow; }
+    45%  { color: green; }
+    60%  { color: blue; }
+    75%  { color: indigo; }
+    90%  { color: violet; }
+    100% { color: red; }
+}
+
+/* Add other styles for your application below */
+
+/* --- Prompt Styles --- */
+#prompt-host-container {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.8);
+    display: none; /* Hidden by default */
+    justify-content: center;
+    align-items: center;
+    z-index: 200;
+}
+
+#prompt-host-container.visible {
+    display: flex; /* Show when needed */
+}
+
+.prompt-wrapper {
+    display: flex;
+    flex-direction: column; /* Default to vertical stacking */
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    background-color: black;
+    border: 1px solid white;
+    max-width: 500px;
+    width: 100%; /* Ensure wrapper takes space */
+    box-sizing: border-box; /* Include padding in width */
+    margin: auto;
+}
+
+.prompt-text {
+    width: 100%; /* Ensure the element takes full width to allow centering */
+    margin-bottom: 15px; /* Space between prompt text and input/options */
+    text-align: center;
+}
+
+.prompt-input-container {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    width: 100%;
+    gap: 10px; /* Add space between input and right-side buttons */
+}
+
+.prompt-input-text {
+    flex-grow: 1;
+    background-color: black;
+    color: white;
+    border: 1px solid white;
+    padding: 8px;
+    font-family: 'Courier New', Courier, monospace;
+}
+
+.prompt-input-text:focus {
+    outline: none;
+    border-color: #a0a0a0;
+}
+
+.prompt-input-text.prompt-input-available {
+    border-color: #4CAF50; /* Green */
+}
+
+.prompt-input-text.prompt-input-unavailable {
+    border-color: #F44336; /* Red */
+}
+
+/* Container for elements to the right of an input (price, button) */
+.prompt-input-right {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.prompt-price {
+    color: #4CAF50; /* Green */
+    font-weight: bold;
+    white-space: nowrap;
+}
+
+.prompt-button,
+.prompt-option-button {
+    background-color: black;
+    color: white;
+    border: 1px solid white;
+    padding: 8px 15px;
+    cursor: pointer;
+    font-family: 'Courier New', Courier, monospace;
+    transition: background-color 0.3s, color 0.3s;
+    white-space: nowrap;
+}
+
+.prompt-button:hover,
+.prompt-option-button:hover {
+    background-color: white;
+    color: black;
+}
+
+.prompt-options-container {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+/* Terminal Styles */
+#terminal-view {
+    width: 100%;
+    height: 100%;
+    background-color: black;
+    color: white;
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 14px;
+    padding: 20px;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+}
+
+#terminal-output {
+    flex: 1;
+    overflow-y: auto;
+    margin-bottom: 10px;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-size: 14px;
+}
+
+.terminal-line {
+    margin: 0;
+    padding: 0;
+    line-height: 1.2;
+    font-size: 14px;
+}
+
+.terminal-line.terminal-input {
+    color: #00ff00; /* Green for user input */
+}
+
+.terminal-line.terminal-error {
+    color: #ff4444; /* Red for errors */
+}
+
+.terminal-line.terminal-success {
+    color: #00ff00; /* Green for success */
+}
+
+.terminal-line.terminal-warning {
+    color: #ffaa00; /* Orange for warnings */
+}
+
+.terminal-line.terminal-info {
+    color: #00aaff; /* Blue for info */
+}
+
+.terminal-line.terminal-system {
+    color: #888888; /* Gray for system messages */
+}
+
+.terminal-line.terminal-terminal {
+    color: white; /* Default white for terminal output */
+}
+
+#terminal-input-line {
+    display: flex;
+    align-items: baseline;
+    margin-top: 10px;
+    position: relative;
+}
+
+#terminal-input {
+    background-color: transparent;
+    border: none;
+    outline: none;
+    color: white;
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 14px;
+    caret-color: transparent; /* Hide default cursor */
+    padding: 0;
+    margin: 0;
+    width: auto;
+    min-width: 0;
+    flex: 0 1 auto;
+}
+
+#terminal-input:focus {
+    background-color: transparent;
+    border: none;
+    outline: none;
+}
+
+#terminal-cursor {
+    color: white;
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 14px;
+    font-weight: bold;
+    animation: blink 1s infinite;
+    position: absolute;
+    left: 0;
+    pointer-events: none;
+}
+
+/* Clean cursor - remove default browser styling */
+#terminal-input::selection {
+    background-color: rgba(255, 255, 255, 0.2);
+}
+
+/* Hide placeholder */
+#terminal-input::placeholder {
+    color: transparent;
+}
+
+@keyframes blink {
+    0%, 50% {
+        opacity: 1;
+    }
+    51%, 100% {
+        opacity: 0;
+    }
+}
+
+/* Terminal view specific body styles */
+body.terminal-view-active {
+    overflow: hidden; /* Prevent scrolling when terminal is active */
+}
+
+body.terminal-view-active #console-container {
+    padding-top: 80px; /* Account for fixed header */
+    height: calc(100vh - 80px);
+    overflow: hidden;
+}

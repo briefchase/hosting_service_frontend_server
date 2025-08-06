@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Host Control</title>
+    <link rel="manifest" href="/static/manifest.json">
+    <link rel="stylesheet" href="/static/style.css"> <!-- Optional: Add a CSS file -->
+    <meta name="theme-color" content="#000"/>
+    <!-- Add icon links for Apple devices -->
+    <link rel="apple-touch-icon" href="/static/icon.png">
+    <link rel="icon" type="image/png" href="/static/icon.png"> <!-- Standard favicon -->
+    <meta name="description" content="A simple, clean console interface for web services.">
+    <link rel="icon" href="/static/images/favicon.ico" type="image/x-icon">
+    <!-- Stripe.js -->
+    <script src="https://js.stripe.com/v3/"></script>
+    <!-- Google Platform Library -->
+    <script src="https://accounts.google.com/gsi/client" async defer></script>
+</head>
+<body class="main-app">
+    <div id="console-container">
+        <div id="header-container">
+            <div id="site-title"></div>
+            <!-- Add static buttons, initially hidden -->
+            <span id="back-button" class="back-button" style="display: none;">&lt; back</span>
+            <span id="account-button" class="account-button" style="display: none;"></span>
+        </div>
+        <!-- Content (login or menu) will be loaded here -->
+    </div>
+
+    <div id="prompt-host-container"></div>
+
+    <script type="module" src="/static/main.js"></script> <!-- Link the main index script as a module -->
+
+</body>
+</html>
