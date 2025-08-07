@@ -160,6 +160,17 @@ body {
     /* text-decoration: none; Ensure no underline */
 }
 
+/* Google Verification Notice */
+.google-verification-notice {
+    color: #888888; /* Grey color for notice */
+    font-size: 0.8em;
+    text-align: center;
+    padding: 10px;
+    margin-bottom: 15px;
+    width: 100%;
+    box-sizing: border-box;
+}
+
 /* Status Message Styling */
 .main-app #login-view-container #login-status-message {
     min-height: 1.2em;
@@ -343,6 +354,10 @@ body {
     z-index: 1000; /* Ensure it's on top */
     pointer-events: none; /* Prevent tooltip from interfering with mouse events */
     box-shadow: 2px 2px 5px rgba(0,0,0,0.2); /* Optional: subtle shadow */
+}
+
+.about-content {
+    margin: 2em 5em;
 }
 
 /* Utility class to hide elements */

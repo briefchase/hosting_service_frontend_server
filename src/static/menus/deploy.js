@@ -33,21 +33,20 @@ const deployMenuConfig = {
             action: 'handleDeployWordPress',
             info: 'Deploy a lamp stack in a vm running wordpress.' 
         },
-        /*
-        { 
+        /*{ 
             id: 'grapes-option', 
             text: 'grapes', 
             type: 'button', 
-            action: 'handleDeployGrapes'
-        },
+            action: 'handleDeployGrapes',
+            info: 'Deploy a GrapesJS instance for web building.'
+        },*/
         { 
             id: 'vm-option', 
-            text: 'blank vm', 
+            text: 'blank', 
             type: 'button', 
             action: 'handleDeployVM',
             info: 'Create a new Virtual Machine instance.' 
         },
-        */
     ],
     backTarget: 'dashboard-menu'
 };
@@ -150,7 +149,7 @@ async function _initiateDeploymentAndLoadTerminal(params = {}, deploymentType) {
 
 // Action handler for deploying a blank VM
 export const handleDeployVM = requireAuthAndSubscription(
-    (params) => _initiateDeploymentAndLoadTerminal(params, 'vm'),
+    (params) => _initiateDeploymentAndLoadTerminal(params, 'blank'),
     'deploy a vm'
 );
 
