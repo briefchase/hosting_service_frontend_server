@@ -3,7 +3,13 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Host Control</title>
+    <title></title>
+    <script>
+        // Set page title to hostname only (no protocol)
+        (function(){
+            try { document.title = window.location.hostname; } catch(e) {}
+        })();
+    </script>
     <link rel="manifest" href="/static/manifest.json">
     <link rel="stylesheet" href="/static/style.css"> <!-- Optional: Add a CSS file -->
     <meta name="theme-color" content="#000"/>
@@ -28,7 +34,7 @@
         <!-- Content (login or menu) will be loaded here -->
     </div>
 
-    <div id="prompt-host-container"></div>
+    <!-- prompt container is created dynamically by prompt.js -->
 
     <script type="module" src="/static/main.js"></script> <!-- Link the main index script as a module -->
 

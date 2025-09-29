@@ -36,6 +36,7 @@ let currentUser = null; // Stores { guest: true } or authenticated user object
 let actionHandlers = {}; // To be populated in DOMContentLoaded
 let currentView = 'login'; // Track current view: 'login', 'menu', 'terminal', 'about'
 let terminalReturnParams = null; // Store params for returning from terminal
+// pendingReauthAction is now stored on window object by authenticate.js
 
 // Global back button state management
 let backButtonHandlers = {
@@ -50,6 +51,12 @@ let accountButton = null;
 let backButton = null;
 let headerContainer = null;
 let siteTitle = null; // Add variable for site title
+let spotifyEmbedEl = null; // Persistent Spotify embed element
+let spotifyPositionHandlersAttached = false; // Track if resize/scroll handlers are attached
+
+// Spikeball gif shown only on landing view
+let spikeballEl = null;
+let spikeballHandlersAttached = false;
 
 // --- Utility Functions ---
 
@@ -91,13 +98,25 @@ export async function fetchWithAuth(url, options = {}) {
     });
 
     if (response.status === 401) {
-        // Unauthorized: Token might be invalid or expired
-        console.warn("Received 401 Unauthorized. Clearing session and redirecting to login.");
-        sessionStorage.removeItem('currentUser');
+        // Unauthorized: Token invalid/expired. Silently re-initiate authentication globally.
+        console.warn("Received 401 Unauthorized. Clearing session and re-initiating authentication.");
+        try { sessionStorage.removeItem('currentUser'); } catch (_) {}
         currentUser = null;
-        loadLandingView(); // Redirect to login
-        // Throw an error to prevent further processing by the caller
-        throw new Error('Unauthorized'); 
+        // Prevent multiple concurrent reauth popups
+        if (!window.__reauthInProgress) {
+            window.__reauthInProgress = true;
+            try {
+                const statusContainer = document.getElementById('menu-status-message')
+                    || document.getElementById('console-container')
+                    || document.body;
+                initializeGoogleSignIn(statusContainer, handleAuthenticationSuccess);
+                triggerGoogleSignIn(statusContainer);
+            } catch (e) {
+                console.error('Failed to trigger re-authentication flow:', e);
+            }
+        }
+        // Signal to callers that reauth has begun; callers should avoid user-facing errors
+        throw new Error('ReauthInitiated');
     }
     return response;
 }
@@ -117,6 +136,202 @@ async function fetchHTML(url) {
     } catch (error) {
         console.error(`Error fetching HTML from ${url}:`, error);
         return `<p style="color:red;">Error loading component: ${error.message}</p>`; // Return error message HTML
+    }
+}
+
+/**
+ * Ensures a persistent Spotify embed exists and is attached to document.body.
+ * If the landing template provided an iframe with data-testid="embed-iframe",
+ * it will be moved to the body and reused; otherwise a new one is created.
+ * The element is kept visible/hidden via opacity so playback can persist.
+ */
+function ensureSpotifyEmbedCreated() {
+    if (spotifyEmbedEl && document.body.contains(spotifyEmbedEl)) return spotifyEmbedEl;
+
+    // Prefer an existing iframe from the landing template if present
+    const templateEmbed = document.querySelector('iframe[data-testid="embed-iframe"]');
+    if (templateEmbed) {
+        spotifyEmbedEl = templateEmbed;
+    } else {
+        spotifyEmbedEl = document.createElement('iframe');
+        spotifyEmbedEl.setAttribute('data-testid', 'embed-iframe');
+        spotifyEmbedEl.src = 'https://open.spotify.com/embed/playlist/7LDlK4VLv2RNxaQ7Z4D6qI?utm_source=generator';
+        spotifyEmbedEl.frameBorder = '0';
+        spotifyEmbedEl.allowFullscreen = '';
+        spotifyEmbedEl.allow = 'autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture';
+        spotifyEmbedEl.loading = 'lazy';
+    }
+
+    // Apply persistent, full-bleed styling
+    spotifyEmbedEl.id = 'global-spotify-embed';
+    spotifyEmbedEl.style.borderRadius = '12px';
+    spotifyEmbedEl.style.display = 'block';
+    spotifyEmbedEl.style.zIndex = '10';
+    spotifyEmbedEl.style.position = 'fixed';
+    spotifyEmbedEl.style.left = '50%';
+    spotifyEmbedEl.style.transform = 'translateX(-50%)';
+    spotifyEmbedEl.style.opacity = '0';
+    spotifyEmbedEl.style.pointerEvents = 'none';
+
+    // Remove presentational attributes to avoid conflicts; CSS will control size
+    try { spotifyEmbedEl.removeAttribute('width'); } catch (_) {}
+    try { spotifyEmbedEl.removeAttribute('height'); } catch (_) {}
+
+    // Move to body so it persists across view changes
+    if (spotifyEmbedEl.parentElement !== document.body) {
+        document.body.appendChild(spotifyEmbedEl);
+    }
+
+    return spotifyEmbedEl;
+}
+
+function refreshSpotifyEmbedPosition() {
+    if (!spotifyEmbedEl) return;
+    // Only compute relative to landing view elements
+    const loginContainer = document.getElementById('login-view-container');
+    const consoleBtn = document.getElementById('console-button');
+    const anchorEl = (consoleBtn && consoleBtn.parentElement) ? consoleBtn : loginContainer;
+    if (!anchorEl) return;
+
+    const rect = anchorEl.getBoundingClientRect();
+    // Fixed pixel sizing (2:1 aspect)
+    const targetWidthPx = 320;
+    const targetHeightPx = 120;
+
+    spotifyEmbedEl.style.width = `${targetWidthPx}px`;
+    spotifyEmbedEl.style.height = `${targetHeightPx}px`;
+    // Position just below the buttons container
+    spotifyEmbedEl.style.top = `${Math.round(rect.bottom + 16)}px`;
+}
+
+function showSpotifyEmbed() {
+    const el = ensureSpotifyEmbedCreated();
+    // Recalculate size/position relative to landing buttons
+    refreshSpotifyEmbedPosition();
+    el.style.opacity = '1';
+    el.style.pointerEvents = 'auto';
+
+    // Attach resize/scroll handlers once for responsive positioning
+    if (!spotifyPositionHandlersAttached) {
+        spotifyPositionHandlersAttached = true;
+        window.addEventListener('resize', refreshSpotifyEmbedPosition);
+        window.addEventListener('scroll', refreshSpotifyEmbedPosition, { passive: true });
+    }
+}
+
+function hideSpotifyEmbed() {
+    // Keep in DOM and keep dimensions so playback persists
+    if (!spotifyEmbedEl) return;
+    spotifyEmbedEl.style.opacity = '0';
+    spotifyEmbedEl.style.pointerEvents = 'none';
+}
+
+// --- Spikeball (landing only) helpers ---
+let mockupEl = null; // Add global variable for mockup image
+
+function ensureSpikeballCreated() {
+    if (spikeballEl && document.body.contains(spikeballEl)) {
+        ensureMockupCreated();
+        return spikeballEl;
+    }
+    spikeballEl = document.createElement('img');
+    spikeballEl.id = 'landing-spikeball-gif';
+    spikeballEl.src = '/static/resources/spikeball.gif';
+    spikeballEl.alt = 'spikeball';
+    spikeballEl.style.position = 'absolute';
+    spikeballEl.style.width = '200px';
+    spikeballEl.style.height = '200px';
+    spikeballEl.style.left = '0px';
+    spikeballEl.style.zIndex = '20';
+    document.body.appendChild(spikeballEl);
+    ensureMockupCreated();
+    return spikeballEl;
+}
+
+function ensureMockupCreated() {
+    if (mockupEl && document.body.contains(mockupEl)) return mockupEl;
+    mockupEl = document.createElement('img');
+    mockupEl.id = 'landing-mockup-img';
+    mockupEl.src = '/static/resources/clothes/froggo.png';
+    mockupEl.alt = 'mockup';
+    mockupEl.style.position = 'absolute';
+    mockupEl.style.width = '100px';
+    mockupEl.style.height = '100px';
+    mockupEl.style.zIndex = '21'; // On top of spikeball
+    mockupEl.style.transform = 'rotate(15deg)';
+    document.body.appendChild(mockupEl);
+    return mockupEl;
+}
+
+function positionSpikeballBelowHeader() {
+    if (!spikeballEl) return;
+    const header = headerContainer || document.getElementById('header-container');
+    if (!header) return;
+    const rect = header.getBoundingClientRect();
+    const top = Math.round(rect.bottom + window.scrollY);
+    spikeballEl.style.top = `${top}px`;
+
+    // Position horizontally relative to page center with a +200px offset,
+    // while keeping at least a small right margin when near the edge.
+    const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 0;
+    const desiredOffsetFromCenter = 130; // px to the right of center
+    const minRightMargin = 12; // px
+    const elWidth = spikeballEl.offsetWidth || 200;
+
+    const desiredCenterX = Math.round(viewportWidth / 2 + desiredOffsetFromCenter);
+    let left = Math.round(desiredCenterX - elWidth / 2);
+
+    // Clamp so the right edge keeps a minimum margin
+    const maxLeft = Math.max(0, viewportWidth - minRightMargin - elWidth);
+    if (left > maxLeft) left = maxLeft;
+    if (left < 0) left = 0;
+
+    spikeballEl.style.left = `${left}px`;
+    spikeballEl.style.right = 'auto';
+
+    // Position mockup to track spikeball exactly (with slight offset for visual interest)
+    positionMockupRelativeToSpikeball();
+}
+
+function positionMockupRelativeToSpikeball() {
+    if (!mockupEl || !spikeballEl) return;
+
+    const spikeballRect = spikeballEl.getBoundingClientRect();
+    const mockupWidth = mockupEl.offsetWidth || 100;
+    const mockupHeight = mockupEl.offsetHeight || 100;
+
+    // Position mockup on top of spikeball (centered) with 11px offset right and 18px offset up
+    const mockupLeft = Math.round(spikeballRect.left + (spikeballRect.width - mockupWidth) / 2 + 11);
+    const mockupTop = Math.round(spikeballRect.top + (spikeballRect.height - mockupHeight) / 2 - 18);
+
+    mockupEl.style.left = `${mockupLeft}px`;
+    mockupEl.style.top = `${mockupTop}px`;
+}
+
+function showSpikeball() {
+    const el = ensureSpikeballCreated();
+    positionSpikeballBelowHeader();
+    el.style.display = 'block';
+
+    // Show mockup too
+    if (mockupEl) {
+        mockupEl.style.display = 'block';
+    }
+
+    if (!spikeballHandlersAttached) {
+        spikeballHandlersAttached = true;
+        window.addEventListener('resize', positionSpikeballBelowHeader);
+        window.addEventListener('scroll', positionSpikeballBelowHeader, { passive: true });
+    }
+}
+
+function hideSpikeball() {
+    if (!spikeballEl) return;
+    spikeballEl.style.display = 'none';
+
+    // Hide mockup too
+    if (mockupEl) {
+        mockupEl.style.display = 'none';
     }
 }
 
@@ -203,6 +418,26 @@ async function loadLandingView() {
 
     // Setup listeners for the newly added landing elements
     setupLoginViewListeners();
+
+    // Promote the landing iframe to persistent player and ensure only one exists
+    const existingGlobal = document.getElementById('global-spotify-embed');
+    const newlyInserted = document.querySelector('#console-container iframe[data-testid="embed-iframe"]');
+    if (!existingGlobal && newlyInserted) {
+        // Move and configure it as persistent
+        ensureSpotifyEmbedCreated();
+    } else if (existingGlobal && newlyInserted && newlyInserted !== existingGlobal) {
+        // Remove duplicate from template
+        newlyInserted.remove();
+    }
+    showSpotifyEmbed();
+    // Show landing-only spikeball gif below the header on the right
+    try { showSpikeball(); } catch (_) {}
+    // Update legal year dynamically if present
+    const legalYearEl = document.getElementById('legal-year');
+    if (legalYearEl) {
+        const year = new Date().getFullYear();
+        legalYearEl.textContent = String(year);
+    }
     console.log("Landing view loaded and listeners attached.");
 }
 
@@ -210,9 +445,37 @@ async function loadLandingView() {
  * Loads and displays the main menu view from menu.html.
  * @param {string} [initialMenuId] - Optional menu ID to render initially.
  */
+// UI mode helpers
+export function enterPromptMode() {
+    try {
+        document.body.classList.add('prompt-active');
+    } catch (_) {}
+}
+
+export function exitPromptMode() {
+    try {
+        document.body.classList.remove('prompt-active');
+        // Header visibility is managed by the subsequent view
+    } catch (_) {}
+}
+
+// Overlay toggle used by prompt.js to hide menu/content only while the prompt is visible
+export function enterPromptOverlay() {
+    try { document.body.classList.add('prompt-overlay-active'); } catch (_) {}
+    try { document.documentElement.classList.add('prompt-overlay-active'); } catch (_) {}
+}
+export function exitPromptOverlay() {
+    try { document.body.classList.remove('prompt-overlay-active'); } catch (_) {}
+    try { document.documentElement.classList.remove('prompt-overlay-active'); } catch (_) {}
+}
+
 export async function loadConsoleView(param) {
     currentView = 'menu';
     terminalReturnParams = null;
+
+    // Hide embed before clearing content so playback persists
+    try { hideSpotifyEmbed(); } catch (_) {}
+    try { hideSpikeball(); } catch (_) {}
 
     if (!headerContainer) headerContainer = document.getElementById('header-container');
     if (!backButton) backButton = document.getElementById('back-button');
@@ -289,6 +552,10 @@ export async function loadTerminalView(params = {}) {
     // Cleanup any active menu polling/handlers
     cleanupCurrentMenu();
 
+    // Hide embed before clearing content so playback persists
+    try { hideSpotifyEmbed(); } catch (_) {}
+    try { hideSpikeball(); } catch (_) {}
+
     const consoleContainer = document.getElementById('console-container');
     const headerContainer = document.getElementById('header-container');
     const promptContainer = document.getElementById('prompt-container');
@@ -310,18 +577,8 @@ export async function loadTerminalView(params = {}) {
     
     if (consoleContainer) consoleContainer.style.display = 'block';
 
-    // Configure header buttons for terminal view
-    if (headerContainer) {
-        headerContainer.style.display = 'flex'; // Show header
-        if (siteTitle) siteTitle.style.display = 'inline-block'; // Ensure site title is visible
-        if (backButton) {
-            backButton.style.display = 'inline-block'; // Explicitly show back button
-            delete backButton.dataset.targetMenu;      // Clear any menu-specific target
-        }
-        if (accountButton) {
-            accountButton.style.display = 'none';      // Explicitly hide account button
-        }
-    }
+    // Header/back visibility is tied to handler registration now
+    if (headerContainer) headerContainer.style.display = 'flex';
     document.body.classList.add('terminal-view-active');
 
     const terminalParams = { ...params };
@@ -334,9 +591,13 @@ export async function loadTerminalView(params = {}) {
     } catch (error) {
         console.error("Failed to initialize terminal:", error);
         // Show error in the terminal output area itself if possible
-        const outputArea = document.getElementById('terminal-output');
-        if (outputArea) {
-            outputArea.innerHTML = `<div class="terminal-line terminal-error">Critical Error: Could not initialize terminal. ${error.message}</div>`;
+        if (window.addOutputToTerminal) {
+            window.addOutputToTerminal(`Critical Error: Could not initialize terminal. ${error.message}`, 'error');
+        } else {
+            const outputArea = document.getElementById('terminal-output');
+            if (outputArea) {
+                outputArea.innerHTML = `<div class="terminal-line terminal-terminal">Critical Error: Could not initialize terminal. ${error.message}</div>`;
+            }
         }
     }
 }
@@ -346,14 +607,10 @@ export function returnFromTerminal() {
     console.log("Returning from terminal view. Loading console view.");
     cleanupTerminal(); // Clean up any terminal-specific resources or intervals
 
-    // --- START: Reset menu title ---
-    // This handles the case where a deployment was running and we are returning.
     const menuTitleElement = document.getElementById('menu-text');
     if (menuTitleElement && menuTitleElement.classList.contains('rainbow-text')) {
         menuTitleElement.classList.remove('rainbow-text');
-        // The title will be reset automatically when renderMenu is called in loadConsoleView
     }
-    // --- END: Reset menu title ---
 
     loadConsoleView();
 }
@@ -376,18 +633,19 @@ async function loadAboutView() {
     if (!backButton) backButton = document.getElementById('back-button');
     if (!accountButton) accountButton = document.getElementById('account-button');
 
-    // --- Configure Header Buttons ---
-    if (backButton) {
-        backButton.style.display = 'inline-block'; // Show back button
-        delete backButton.dataset.targetMenu; // Clear menu nav data
-    }
-    if (accountButton) {
-        accountButton.style.display = 'none'; // Hide account button
-        delete accountButton.dataset.targetMenu;
-    }
-    // --- End Header Buttons ---
+    // Back button visibility tied to handler registration
+    try {
+        registerBackButtonHandler('menu', () => {
+            unregisterBackButtonHandler('menu');
+            loadLandingView();
+        });
+    } catch (_) {}
 
     if (!consoleContainer) return;
+
+    // Hide embed before clearing content so playback persists
+    try { hideSpotifyEmbed(); } catch (_) {}
+    try { hideSpikeball(); } catch (_) {}
 
     clearConsoleContent(); // Clear previous content
     const aboutHTML = await fetchHTML('/templates/about.html');
@@ -413,8 +671,25 @@ function handleConsoleButtonClick() {
  */
 function handleAuthenticationSuccess(userSession) {
     // userSession is now the object {email, token} from data.session
-    currentUser = userSession; 
-    loadConsoleView();
+    currentUser = userSession;
+    try { window.__reauthInProgress = false; } catch (_) {}
+
+    // If there's a pending action from reauth, re-execute it
+    if (window.pendingReauthAction) {
+        const { actionFn, params } = window.pendingReauthAction;
+        window.pendingReauthAction = null; // Clear before re-execution to prevent loops
+        console.log('Re-executing interrupted action after successful reauth');
+        try {
+            actionFn(params);
+        } catch (error) {
+            console.error('Error re-executing pending action:', error);
+            // If re-execution fails, fall back to loading console view
+            loadConsoleView();
+        }
+    } else {
+        // No pending action, just load the console view
+        loadConsoleView();
+    }
 }
 
 /**
@@ -491,6 +766,19 @@ export function registerBackButtonHandler(type, handler) {
         backButtonHandlers.menuNavigation = handler;
         console.log('🔙 Registered menu navigation handler');
     }
+    try {
+        const hdr = document.getElementById('header-container');
+        const btn = document.getElementById('back-button');
+        if (hdr) hdr.style.display = 'flex';
+        if (btn) {
+            btn.style.display = 'inline-block';
+            delete btn.dataset.targetMenu;
+        }
+        // Ensure visibility even if styles were previously toggled
+        document.body.classList.add('terminal-view-active');
+        // Recompute header collision state after showing button
+        try { checkHeaderCollision(); } catch (_) {}
+    } catch (_) {}
 }
 
 /**
@@ -508,6 +796,19 @@ export function unregisterBackButtonHandler(type) {
         backButtonHandlers.menuNavigation = null;
         console.log('🔙 Unregistered menu navigation handler');
     }
+    try {
+        const btn = document.getElementById('back-button');
+        const hdr = document.getElementById('header-container');
+        const hasAnyHandler = !!(backButtonHandlers.promptCancel || backButtonHandlers.terminalCancel || backButtonHandlers.menuNavigation);
+        if (!hasAnyHandler) {
+            // If no active handler and no explicit menu navigation target, hide the back button
+            if (btn && !btn.dataset.targetMenu) {
+                btn.style.display = 'none';
+            }
+            // Header visibility is governed by views; keep as-is but ensure collision is recalculated
+        }
+        try { checkHeaderCollision(); } catch (_) {}
+    } catch (_) {}
 }
 
 /**
@@ -567,22 +868,53 @@ document.addEventListener('DOMContentLoaded', async () => {
         return;
     }
 
+    // Set CSS var for header height so overlays (prompt) can position below it
+    try {
+        const setHeaderVar = () => {
+            const h = headerContainer.getBoundingClientRect().height || 0;
+            document.documentElement.style.setProperty('--header-height', `${Math.ceil(h)}px`);
+        };
+        setHeaderVar();
+        window.addEventListener('resize', setHeaderVar, { passive: true });
+    } catch (_) {}
+
     // Initialize Stripe.js
     await initializeStripe();
 
-    // Set dynamic site title based on current domain
+    // Set header site title to protocol + hostname
     const currentDomain = window.location.hostname;
     const currentProtocol = window.location.protocol;
     siteTitle.textContent = `${currentProtocol}//${currentDomain}`;
     console.log(`Site title set to: ${siteTitle.textContent}`);
 
+    // Keep a consistent font for the title (no randomization)
+
+    // Random background image from /static/resources/backgrounds on each load (via manifest)
+    try {
+        const manifestResp = await fetch('/static/resources/backgrounds/manifest.json');
+        if (manifestResp.ok) {
+            const files = await manifestResp.json();
+            if (Array.isArray(files) && files.length > 0) {
+                const chosenBg = files[Math.floor(Math.random() * files.length)];
+                const bgUrl = `/static/resources/backgrounds/${chosenBg}`;
+                document.documentElement.style.height = '100%';
+                document.body.style.minHeight = '100%';
+                document.body.style.backgroundImage = `url('${bgUrl}')`;
+                document.body.style.backgroundRepeat = 'no-repeat';
+                document.body.style.backgroundSize = 'cover';
+                document.body.style.backgroundPosition = 'center center';
+                document.body.style.backgroundAttachment = 'fixed';
+            }
+        }
+    } catch (_) {}
+
     // --- START: Action Handler Imports ---
     // Import all functions that can be triggered by menu actions.
     const { handleDeployWordPress, handleDeployGrapes, handleDeployVM } = await import('/static/menus/deploy.js');
-    const { listInstances } = await import('/static/menus/instance.js');
+    const { listInstances, destroyInstance } = await import('/static/menus/instance.js');
     const { listDomains, registerDomain } = await import('/static/menus/domain.js');
     const { listBillingAccounts } = await import('/static/menus/usage.js');
-    const { handleSubscribe } = await import('/static/menus/subscription.js');
+    const { handleSubscribe, handleCancelSubscription } = await import('/static/menus/subscription.js');
     // --- END: Action Handler Imports ---
 
     // Define the map of action handlers after all modules have loaded
@@ -593,6 +925,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         handleDeployVM: handleDeployVM,
         // Resource listing actions
         listInstances: listInstances,
+        destroyInstance: destroyInstance,
         listDomains: listDomains,
         registerDomain: registerDomain,
         listBillingAccounts: listBillingAccounts,
@@ -601,7 +934,8 @@ document.addEventListener('DOMContentLoaded', async () => {
         // Terminal/View actions
         loadTerminalView: loadTerminalView,
         // Subscription actions
-        handleSubscribe: handleSubscribe
+        handleSubscribe: handleSubscribe,
+        handleCancelSubscription: handleCancelSubscription
     };
 
     // Try to load user from sessionStorage
@@ -666,7 +1000,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Register the service worker (restored original code)
     if ('serviceWorker' in navigator) {
         window.addEventListener('load', () => {
-            navigator.serviceWorker.register('/service-worker.js')
+            navigator.serviceWorker.register('/static/service-worker.js')
                 .then(registration => console.log('SW registered: ', registration))
                 .catch(registrationError => console.log('SW registration failed: ', registrationError));
         });

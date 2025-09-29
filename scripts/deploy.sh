@@ -371,12 +371,15 @@ EOF
 
     # Show appropriate final message based on URL type
     if [[ "$CFG_EXTERNAL_URL" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-        echo "Remote deployment completed successfully!"
-        echo "Access your site at: http://$CFG_EXTERNAL_URL"
+        echo "Deployment successful."
+        echo "Site available at: http://$CFG_EXTERNAL_URL"
     else
-        echo "Remote deployment completed successfully!"
-        echo "Access your site at: https://$CFG_EXTERNAL_URL"
-        echo "Note: SSL certificate will be automatically configured by Let's Encrypt"
+        local primary_domain
+        primary_domain=$(echo "$CFG_EXTERNAL_URL" | cut -d, -f1)
+        echo "Deployment successful."
+        echo "Site available at: https://$primary_domain"
+        echo "All configured domains: $CFG_EXTERNAL_URL"
+        echo "Note: SSL is enabled only for domains that passed DNS validation."
     fi
     return 0
 }

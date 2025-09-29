@@ -1,3 +1,74 @@
+/* Prompt overlay container (single element, no host wrapper) */
+#prompt-container {
+    position: fixed;
+    top: var(--header-height, 56px);
+    height: calc(100vh - var(--header-height, 56px));
+    left: 0;
+    right: 0;
+    z-index: 200; /* below header (300), above main content */
+    background-color: rgba(0, 0, 0, 0.8);
+    /* Single scroll region */
+    overflow-y: auto;
+    overflow-x: hidden;
+    -webkit-overflow-scrolling: touch;
+    touch-action: pan-y; /* Allow vertical scroll gestures */
+    /* Prevent scroll chaining to page */
+    overscroll-behavior-y: contain; /* contain vertical only; allow horizontal gestures if needed */
+    -ms-overflow-style: none; /* IE and Edge: hide scrollbar */
+    scrollbar-width: none; /* Firefox: hide scrollbar */
+    /* Equal side/bottom spacing below the header */
+    padding: 0 20px 20px 20px;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-start;
+    align-items: stretch;
+    min-height: 0; /* allow flex child to shrink for proper scrolling */
+}
+
+/* WebKit: hide scrollbar while preserving scroll */
+#prompt-container::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+    display: none;
+}
+
+.embedded-checkout-container::-webkit-scrollbar {
+    width: 0;
+    height: 0;
+    display: none;
+}
+.embedded-checkout-container {
+    scrollbar-width: none;
+}
+
+/* Ensure the prompt container fills the host and is the scroller */
+/* duplicate rules removed; consolidated above */
+
+/* Remove dim backdrop for special prompts (e.g., subscription) */
+/* Disable dim pseudo-elements when both classes are on the same element */
+.prompt-no-dim.prompt-overlay-active::before,
+.prompt-no-dim.prompt-overlay-active::after {
+    display: none !important;
+    background: transparent !important;
+}
+/* Also ensure the container (if it has a backdrop) is transparent */
+.prompt-no-dim #prompt-container {
+    background: transparent !important;
+}
+
+/* Hide header elements during blocking prompts */
+.prompt-overlay-active #site-title {
+    visibility: hidden !important; /* ensure title is visually hidden */
+}
+.prompt-overlay-active #account-button {
+    visibility: hidden !important; /* override inline display toggles while preserving layout */
+}
+
+/* Preserve header height/layout when elements are hidden during prompts */
+.prompt-overlay-active #header-container {
+    min-height: var(--header-height, 56px);
+}
 /* Global Resets & Base Styles */
 body {
     background-color: black;
@@ -81,17 +152,32 @@ body {
     position: fixed; /* Make header fixed at the top */
     top: 0;
     left: 0;
-    background-color: black; /* Ensure header has background */
-    z-index: 100; /* Keep header above other content */
+    background-color: transparent; /* Let page background show through */
+    z-index: 300; /* Keep header above overlays like prompts */
     display: flex; /* Use flex for alignment inside header */
     align-items: center; /* Center items vertically */
     justify-content: center; /* Center site title */
 }
 
-.main-app #site-title {
-    /* No longer need absolute positioning within flex header */
-    /* transform: translateX(-50%); removed */
+/* Prompt mode: hide title/account and main content */
+/* Preserve header layout while hiding content */
+body.prompt-active #site-title { visibility: hidden !important; }
+body.prompt-active #account-button { visibility: hidden !important; }
+/* Only hide content during an active prompt overlay */
+body.prompt-overlay-active #menu-container { display: none !important; }
+body.prompt-overlay-active #main-content { display: none !important; }
+/* Prevent background/body scrolling while prompt overlay is active */
+html.prompt-overlay-active,
+body.prompt-overlay-active {
+    overflow: hidden;
 }
+
+/* Ensure underlying app container does not scroll while overlay is active */
+body.prompt-overlay-active #console-container {
+    overflow: hidden !important;
+}
+
+/* Removed empty rule for #site-title; inherits layout from header flex */
 
 /* Dynamic Content Containers (Login/Menu) */
 /* Style the containers loaded into #console-container */
@@ -190,6 +276,7 @@ body {
     text-align: center;
     margin-top: 20px; /* Space above the links */
     font-size: 0.8em; /* Smaller font size */
+    margin-bottom: 18px; /* Breathing room from bottom */
 }
 
 .legal-links a {
@@ -336,10 +423,20 @@ body {
     color: black;
 }
 
-/* Submenu display is controlled by menu.js */
-#deploy-submenu { /* Keep ID selector if specific */
-    /* display: none; */ /* Handled by JS */
+/* Advanced option styling: keep red text, including hover */
+#vm-option {
+    color: #ff2b2b;
+    border-color: #ff2b2b;
 }
+#vm-option:hover {
+    background-color: rgba(255, 43, 43, 0.15);
+    color: #ff2b2b;
+}
+
+/* (Removed) Blood drip overlay styles */
+
+/* Submenu display is controlled by menu.js */
+/* Removed empty rule for #deploy-submenu; visibility handled by JS */
 
 /* Tooltip Styles */
 #tooltip {
@@ -394,38 +491,42 @@ body {
     100% { color: red; }
 }
 
+/* Mockup pulse animation */
+@keyframes mockupPulse {
+    0%, 100% {
+        transform: rotate(15deg) scale(0.9);
+    }
+    50% {
+        transform: rotate(15deg) scale(0.95);
+    }
+}
+
+/* Alternative approach - separate transform and animation */
+#landing-mockup-img {
+    animation: mockupPulse 3s ease-in-out infinite;
+}
+
 /* Add other styles for your application below */
 
 /* --- Prompt Styles --- */
-#prompt-host-container {
-    position: fixed;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    background-color: rgba(0, 0, 0, 0.8);
-    display: none; /* Hidden by default */
-    justify-content: center;
-    align-items: center;
-    z-index: 200;
-}
-
-#prompt-host-container.visible {
-    display: flex; /* Show when needed */
-}
 
 .prompt-wrapper {
     display: flex;
     flex-direction: column; /* Default to vertical stacking */
     align-items: center;
-    justify-content: center;
+    justify-content: flex-start;
     padding: 20px;
     background-color: black;
     border: 1px solid white;
-    max-width: 500px;
-    width: 100%; /* Ensure wrapper takes space */
+    max-width: none; /* Allow full-width */
+    width: 100%; /* Fill available width */
     box-sizing: border-box; /* Include padding in width */
-    margin: auto;
+    margin: 0; /* Container padding handles spacing */
+    /* Let the container (not wrapper) handle scrolling to avoid nested scrollbars */
+    max-height: none;
+    overflow: visible;
+    flex: 1 1 auto; /* Fill available height of #prompt-container */
+    min-height: 0; /* Allow flex child to shrink for proper scrolling */
 }
 
 .prompt-text {
@@ -440,6 +541,12 @@ body {
     align-items: center;
     width: 100%;
     gap: 10px; /* Add space between input and right-side buttons */
+}
+
+/* Variant: stack the button below the input and center it */
+.prompt-input-container.prompt-input-container--stacked {
+    flex-direction: column;
+    align-items: center;
 }
 
 .prompt-input-text {
@@ -469,6 +576,12 @@ body {
     display: flex;
     align-items: center;
     gap: 10px;
+}
+
+.prompt-input-right.prompt-input-right--stacked {
+    width: 100%;
+    justify-content: center;
+    margin-top: 10px; /* space between input and button */
 }
 
 .prompt-price {
@@ -501,6 +614,17 @@ body {
     gap: 10px;
 }
 
+/* Embedded checkout should fill available height inside the prompt */
+.embedded-checkout-container {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    height: auto;
+    min-height: 60vh;
+    flex: 0 0 auto;
+    overflow: visible; /* Let #prompt-container be the scroller */
+}
+
 /* Terminal Styles */
 #terminal-view {
     width: 100%;
@@ -513,6 +637,14 @@ body {
     box-sizing: border-box;
     display: flex;
     flex-direction: column;
+    /* Center terminal in available space */
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    /* Make terminal responsive to header height */
+    max-width: calc(100vw - 40px);
+    max-height: calc(100vh - var(--header-height, 80px) - 40px);
 }
 
 #terminal-output {
@@ -564,6 +696,7 @@ body {
     align-items: baseline;
     margin-top: 10px;
     position: relative;
+    margin-top: auto; /* Push input to bottom of terminal */
 }
 
 #terminal-input {
@@ -623,7 +756,9 @@ body.terminal-view-active {
 }
 
 body.terminal-view-active #console-container {
-    padding-top: 80px; /* Account for fixed header */
-    height: calc(100vh - 80px);
+    position: relative; /* Allow absolute positioning of terminal */
+    height: 100vh;
     overflow: hidden;
+    /* Set CSS custom property for header height */
+    --header-height: 80px;
 }

@@ -1,5 +1,5 @@
 // Import the central menu registry
-import { menus } from '/static/pages/menu.js';
+import { menus, renderMenu } from '/static/pages/menu.js';
 import { API_BASE_URL } from '/static/main.js';
 import { fetchWithAuth } from '/static/main.js';
 import { updateStatusDisplay } from '/static/pages/menu.js';
@@ -33,17 +33,13 @@ export async function initializeStripe() {
 
 // Handle subscription checkout
 export async function handleSubscribe() {
-    if (!stripe) {
-        console.error("Stripe is not initialized. Cannot proceed with subscription.");
-        updateStatusDisplay("Payment system is not ready. Please refresh the page.", "error");
-        return;
-    }
-
-    updateStatusDisplay("Redirecting to checkout...", "info");
+    updateStatusDisplay("loading...", "info");
 
     try {
         const response = await fetchWithAuth(`${API_BASE_URL}/create-checkout-session`, {
-            method: 'POST'
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ embedded: true })
         });
 
         if (!response.ok) {
@@ -52,17 +48,52 @@ export async function handleSubscribe() {
         }
 
         const session = await response.json();
-        const { error } = await stripe.redirectToCheckout({
-            sessionId: session.checkout_session_id
+
+        if (session && (session.resumed || session.already_active)) {
+            await fetchSubscriptionStatus();
+            updateStatusDisplay('', 'info');
+            return;
+        }
+
+        // Prefer embedded checkout; if client_secret missing, the prompt will request it
+        const clientSecret = session && session.client_secret;
+        const { prompt } = await import('/static/pages/prompt.js');
+        await prompt({
+            id: 'embedded_checkout_prompt',
+            text: 'Complete your subscription below:',
+            type: 'embedded_checkout',
+            required: true,
+            client_secret: clientSecret
         });
 
-        if (error) {
-            console.error("Error redirecting to Stripe Checkout:", error);
-            updateStatusDisplay(error.message, "error");
-        }
+        // After user returns from embedded checkout, refresh status
+        await fetchSubscriptionStatus();
+        updateStatusDisplay('', 'info');
     } catch (error) {
-        console.error("Failed to create checkout session:", error);
+        console.error("Failed to start embedded checkout:", error);
         updateStatusDisplay(`Failed to start subscription process: ${error.message}`, "error");
+    }
+}
+
+// Open Stripe billing portal (frontend may be allowed to talk to Stripe directly per your note)
+// Billing portal removed
+
+export async function handleCancelSubscription() {
+    try {
+        updateStatusDisplay('canceling...', 'info');
+        const response = await fetchWithAuth(`${API_BASE_URL}/cancel-subscription`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ immediate: false }) // set true to cancel immediately
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.error || 'Failed to cancel');
+        // Immediately refresh status and let the status line show the end date
+        await fetchSubscriptionStatus();
+        updateStatusDisplay('', 'info'); // clear transient message
+    } catch (e) {
+        console.error('Cancel subscription error:', e);
+        updateStatusDisplay(`Unable to cancel subscription: ${e.message}`,'error');
     }
 }
 
@@ -75,28 +106,54 @@ async function fetchSubscriptionStatus() {
         }
         const data = await response.json();
 
-        // Update the menu config
+        // Update or create menu items
         const statusItem = menus['subscription-menu'].items.find(item => item.id === 'sub-status');
-        const buttonItem = menus['subscription-menu'].items.find(item => item.id === 'checkout-button');
-        
-        // Update DOM elements directly to avoid re-render loop
-        const statusElement = document.getElementById('sub-status');
-        const buttonElement = document.getElementById('checkout-button');
+        let actionItem = menus['subscription-menu'].items.find(item => item.id === 'subscription-action');
+        if (!actionItem) {
+            actionItem = { id: 'subscription-action', type: 'button', text: '', action: null };
+            menus['subscription-menu'].items.push(actionItem);
+        }
         
         if (data.status === 'active') {
-            if (statusItem) statusItem.text = 'Status: Active';
-            if (statusElement) statusElement.textContent = 'Status: Active';
-            
-            // Hide subscribe button if already active
-            if (buttonItem) buttonItem.hidden = true;
-            if (buttonElement) buttonElement.style.display = 'none';
+            let statusText = 'Status: Active';
+            if (data.cancel_at_period_end && data.ends_on) {
+                const endDate = new Date(data.ends_on * 1000).toLocaleDateString();
+                statusText = `Status: Active (ends ${endDate})`;
+                // While scheduled to end, offer resume (backend will resume on subscribe)
+                actionItem.text = 'resume';
+                actionItem.action = 'handleSubscribe';
+            } else {
+                actionItem.text = 'cancel';
+                actionItem.action = 'handleCancelSubscription';
+            }
+            if (statusItem) statusItem.text = statusText;
         } else {
             if (statusItem) statusItem.text = 'Status: Inactive';
-            if (statusElement) statusElement.textContent = 'Status: Inactive';
-            
-            // Show subscribe button if inactive
-            if (buttonItem) buttonItem.hidden = false;
-            if (buttonElement) buttonElement.style.display = 'list-item';
+            if (actionItem) {
+                actionItem.text = 'subscribe';
+                actionItem.action = 'handleSubscribe';
+            }
+        }
+
+        // Update DOM if element exists; otherwise render once to create it
+        const statusElement = document.getElementById('sub-status');
+        const actionElement = document.getElementById('subscription-action');
+        if (statusElement && statusItem) {
+            statusElement.textContent = statusItem.text;
+        }
+        if (actionElement) {
+            if (actionItem && actionItem.text) {
+                actionElement.textContent = actionItem.text;
+                if (actionItem.action) {
+                    actionElement.setAttribute('data-action', actionItem.action);
+                } else {
+                    actionElement.removeAttribute('data-action');
+                }
+            }
+        } else {
+            if (isOnSubscriptionPage) {
+                renderMenu('subscription-menu');
+            }
         }
     } catch (error) {
         console.error('Error fetching subscription status:', error);
@@ -148,11 +205,9 @@ const subscriptionMenuConfig = {
     text: 'Subscription',
     items: [
         // This item will be updated dynamically
-        { id: 'sub-status', text: 'Status: Checking...', type: 'record' },
-        // This button will be shown/hidden dynamically
-        { id: 'checkout-button', text: 'Subscribe Now', type: 'button', action: 'handleSubscribe', info: 'Redirects to Stripe to complete your purchase.' }
+        { id: 'sub-status', text: 'Status: Checking...', type: 'record' }
     ],
-    backTarget: 'account-menu',
+    backTarget: 'dashboard-menu',
     onRender: async () => {
         // Only start polling if not already started to avoid multiple intervals
         if (!subscriptionPollingInterval) {

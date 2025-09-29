@@ -1,6 +1,6 @@
 // Import the central menu registry and API base URL
 import { menus } from '/static/pages/menu.js';
-import { API_BASE_URL } from '/static/main.js';
+import { API_BASE_URL, fetchWithAuth } from '/static/main.js';
 // Import the function needed to load the terminal view and update status
 import { loadTerminalView, loadConsoleView, returnFromTerminal } from '/static/main.js';
 import { updateStatusDisplay, cleanupCurrentMenu } from '/static/pages/menu.js';
@@ -17,6 +17,7 @@ import {
 import { establishWebSocketConnection } from '/static/scripts/socket.js';
 // Import the global back button management functions
 import { registerBackButtonHandler, unregisterBackButtonHandler } from '/static/main.js';
+import { enterPromptMode, exitPromptMode } from '/static/main.js';
 import { requireAuthAndSubscription } from '/static/scripts/authenticate.js';
 
 // Store references passed from initializeMenu
@@ -28,7 +29,7 @@ const deployMenuConfig = {
     items: [
         { 
             id: 'wordpress-option', 
-            text: 'wordpress', 
+            text: 'basic', 
             type: 'button', 
             action: 'handleDeployWordPress',
             info: 'Deploy a lamp stack in a vm running wordpress.' 
@@ -42,7 +43,7 @@ const deployMenuConfig = {
         },*/
         { 
             id: 'vm-option', 
-            text: 'blank', 
+            text: 'advanced', 
             type: 'button', 
             action: 'handleDeployVM',
             info: 'Create a new Virtual Machine instance.' 
@@ -55,8 +56,10 @@ const deployMenuConfig = {
 menus['deploy-menu'] = deployMenuConfig;
 
 // --- Deployment Initiation ---
-async function _initiateDeploymentAndLoadTerminal(params = {}, deploymentType) {
-    updateStatusDisplay(`Initiating deployment for: ${deploymentType}...`, 'info');
+async function _initiateDeployment(params = {}, deploymentType) {
+    updateStatusDisplay(`Starting deployment…`, 'info');
+    // Enter prompt mode for the duration of the interactive deployment
+    enterPromptMode();
     
     // --- START: Show Loading GIF & Rainbow Text ---
     if (params.menuContainer) {
@@ -77,47 +80,48 @@ async function _initiateDeploymentAndLoadTerminal(params = {}, deploymentType) {
     }
     // --- END: Show Loading GIF & Rainbow Text ---
 
-    const user = getUser(); // Still need user for the token
+    const user = getUser(); // Still need user for initial call
 
     try {
         // Step 1: Initial HTTP call to the /deploy endpoint
-        updateStatusDisplay(`Requesting deployment ID and WebSocket URL for ${deploymentType}...`, 'debug');
-        const response = await fetch(`${API_BASE_URL}/deploy`, {
+        updateStatusDisplay(`Preparing deployment…`, 'info');
+        // Use shared auth wrapper to benefit from silent reauth
+        const response = await fetchWithAuth(`${API_BASE_URL}/deploy`, {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${user.token}`
-            },
-            body: JSON.stringify({ ...params, task: deploymentType })
+            body: { ...params, task: deploymentType }
         });
 
-        const result = await response.json();
+        let result = null;
+        try {
+            result = await response.json();
+        } catch(_) { result = {}; }
 
         if (!response.ok) {
-            const errorMsg = result.message || response.statusText || "Unknown error during deployment request.";
+            const serverError = (result && (result.error || result.message)) ? (result.error || result.message) : null;
+            const errorMsg = serverError || response.statusText || "Unknown error during deployment request.";
             updateStatusDisplay(`Error initiating deployment for ${deploymentType}: ${errorMsg}`, 'error');
             loadConsoleView({ output: `Failed to initiate deployment: ${errorMsg}`, type: 'error' });
             return;
         }
 
-        updateStatusDisplay(`Deployment task for ${deploymentType} created. ID: ${result.deployment_id}.`, 'info');
+        updateStatusDisplay(`Deployment created. Connecting…`, 'info');
 
         // Step 2: Establish WebSocket connection
-        updateStatusDisplay(`Establishing WebSocket connection to ${result.websocket_url}...`, 'debug');
+        updateStatusDisplay(`Connecting…`, 'info');
         const ws = await establishWebSocketConnection(
             result.websocket_url, 
             (ws, event) => {
                 // onOpen callback
-                updateStatusDisplay(`WebSocket connected. Awaiting server instructions for ${deploymentType} (ID: ${result.deployment_id})...`, 'info');
+                updateStatusDisplay(`Connected. Waiting for server…`, 'info');
             },
             null, // onMessage - will be set up in communicate()
             (event) => {
                 // onError callback
-                updateStatusDisplay(`WebSocket connection error for ${deploymentType}`, 'error');
+                updateStatusDisplay(`Connection error.`, 'error');
             },
             (event) => {
                 // onClose callback
-                updateStatusDisplay(`WebSocket connection closed for ${deploymentType}`, 'warning');
+                // Intentionally no status message on normal close
             },
             updateStatusDisplay // statusCallback
         );
@@ -129,10 +133,8 @@ async function _initiateDeploymentAndLoadTerminal(params = {}, deploymentType) {
             return;
         }
 
-        // Step 3: Load the terminal view, passing the existing WebSocket
-        loadTerminalView({ existingWs: ws });
-
-        // Step 4: Start the communication/prompt flow
+        // Step 3: Start the communication/prompt flow. The terminal view will be loaded
+        // by the `communicate` function when it receives the first 'terminal' message.
         communicate(ws, result.deployment_id);
 
     } catch (error) {
@@ -141,6 +143,7 @@ async function _initiateDeploymentAndLoadTerminal(params = {}, deploymentType) {
         console.error(`Deployment initiation exception for ${deploymentType}:`, error);
         loadConsoleView({ output: `Exception during deployment: ${errorMsg}`, type: 'error' });
         cleanupPrompts(); // Ensure prompts are cleared if an error occurs here
+        exitPromptMode(); // Leave prompt mode on error
     }
 }
 
@@ -149,19 +152,19 @@ async function _initiateDeploymentAndLoadTerminal(params = {}, deploymentType) {
 
 // Action handler for deploying a blank VM
 export const handleDeployVM = requireAuthAndSubscription(
-    (params) => _initiateDeploymentAndLoadTerminal(params, 'blank'),
+    (params) => _initiateDeployment(params, 'blank'),
     'deploy a vm'
 );
 
 // Action handler for deploying WordPress
 export const handleDeployWordPress = requireAuthAndSubscription(
-    (params) => _initiateDeploymentAndLoadTerminal(params, 'wordpress'),
+    (params) => _initiateDeployment(params, 'wordpress'),
     'deploy wordpress'
 );
 
 // Action handler for deploying GrapesJS
 export const handleDeployGrapes = requireAuthAndSubscription(
-    (params) => _initiateDeploymentAndLoadTerminal(params, 'grapes'),
+    (params) => _initiateDeployment(params, 'grapes'),
     'deploy grapes'
 );
 
@@ -170,29 +173,75 @@ export const handleDeployGrapes = requireAuthAndSubscription(
 
 // The core logic for handling the WebSocket communication and prompting the user.
 async function communicate(ws, deploymentId) {
-    updateStatusDisplay(`WebSocket communication channel active for ${deploymentId}.`);
+    updateStatusDisplay(`Connection ready.`);
     
-    let terminalLoaded = false;
+  let terminalLoaded = false;
+  let terminalLoading = false;
+  const terminalQueue = [];
     let currentlyPrompting = false;
 
+    // Back button handler to cancel while in prompt phase (pre-terminal)
+    const promptCancelHandler = () => {
+        console.log(`[DEPLOY DEBUG] Back clicked during prompts - cancelling deployment ${deploymentId}`);
+        try {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({
+                    action: "cancel_deployment",
+                    deployment_id: deploymentId,
+                    reason: "user_cancelled_via_back_button"
+                }));
+                try { ws.close(); } catch (_) {}
+            }
+        } catch (e) {
+            console.warn('Error sending cancel over WS:', e);
+        }
+        cleanupPrompts();
+        unregisterBackButtonHandler('prompt');
+        unregisterBackButtonHandler('terminal');
+        // Reset rainbow title if active
+        try {
+            const titleEl = document.getElementById('menu-text');
+            if (titleEl && titleEl.classList.contains('rainbow-text')) {
+                titleEl.classList.remove('rainbow-text');
+            }
+        } catch (_) {}
+        updateStatusDisplay('Deployment cancelled.', 'info');
+        // Return to dashboard
+        if (typeof window.loadConsoleView === 'function') {
+            window.loadConsoleView('dashboard-menu');
+        }
+        exitPromptMode();
+    };
+    // Register prompt back handler immediately
+    registerBackButtonHandler('prompt', promptCancelHandler);
+
     const terminalCancelHandler = () => {
-        console.log(`[DEPLOY DEBUG] 🚫 Back button clicked - cancelling deployment ${deploymentId}`);
+        console.log(`[DEPLOY DEBUG] Back button clicked - cancelling deployment ${deploymentId}`);
         if (ws && ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify({
                 action: "cancel_deployment",
                 deployment_id: deploymentId,
                 reason: "user_cancelled_via_back_button"
             }));
-            updateStatusDisplay(`Deployment ${deploymentId} cancelled by user`, 'info');
+            updateStatusDisplay(`Deployment cancelled.`, 'info');
         } else {
             updateStatusDisplay('Deployment cancelled but connection lost', 'warning');
         }
         unregisterBackButtonHandler('terminal');
+        unregisterBackButtonHandler('prompt');
+        // Reset rainbow title if active
+        try {
+            const titleEl = document.getElementById('menu-text');
+            if (titleEl && titleEl.classList.contains('rainbow-text')) {
+                titleEl.classList.remove('rainbow-text');
+            }
+        } catch (_) {}
         if (returnFromTerminal) {
             returnFromTerminal();
         } else {
             loadConsoleView();
         }
+        exitPromptMode();
     };
     
     registerBackButtonHandler('terminal', terminalCancelHandler);
@@ -286,32 +335,49 @@ async function communicate(ws, deploymentId) {
         updateStatusDisplay(messageText, 'info');
     }
 
-    async function handleTerminalMessage(content) {
+  async function handleTerminalMessage(content) {
         // Always extract the text from the content object for terminal messages.
         const messageText = (typeof content === 'object' && content !== null && content.text)
             ? content.text
             : (typeof content === 'object' && content !== null) ? JSON.stringify(content) : content;
 
-        if (!terminalLoaded) {
-            updateStatusDisplay('Switching to terminal view...', 'info');
-            try {
-                await loadTerminalView({
-                    existingWs: ws,
-                    targetWebsocketPath: 'unused_since_ws_is_provided',
-                    initialMessage: messageText // Pass the extracted text
-                });
-                terminalLoaded = true;
-                // Note: The back button handler is now registered inside loadTerminalView
-            } catch (error) {
-                console.error("Error loading terminal view:", error);
-                updateStatusDisplay(`Error loading terminal: ${error.message}`, 'error');
-            }
-        } else {
-             // If terminal is already loaded, send the *extracted text* directly to it
-            if (window.addOutputToTerminal) {
-                window.addOutputToTerminal(messageText, 'terminal');
-            }
+    if (!terminalLoaded) {
+      // If a load is already in progress, buffer messages to flush after load completes
+      if (terminalLoading) {
+        terminalQueue.push(messageText);
+        return;
+      }
+
+      terminalLoading = true;
+      // We are switching to terminal view; the prompt back handler is no longer needed
+      unregisterBackButtonHandler('prompt');
+      updateStatusDisplay('Switching to terminal view...', 'info');
+      try {
+        await loadTerminalView({
+          existingWs: ws,
+          targetWebsocketPath: 'unused_since_ws_is_provided',
+          initialMessage: messageText
+        });
+        terminalLoaded = true;
+        // Flush any messages that arrived while loading the terminal view
+        if (window.addOutputToTerminal && terminalQueue.length > 0) {
+          for (const queued of terminalQueue.splice(0)) {
+            window.addOutputToTerminal(queued, 'terminal');
+          }
         }
+      } catch (error) {
+        console.error("Error loading terminal view:", error);
+        updateStatusDisplay(`Error loading terminal: ${error.message}`, 'error');
+      } finally {
+        terminalLoading = false;
+      }
+      return;
+    }
+
+    // Terminal already loaded: print line immediately
+    if (window.addOutputToTerminal) {
+      window.addOutputToTerminal(messageText, 'terminal');
+    }
     }
 
     function handleErrorMessage(content) {

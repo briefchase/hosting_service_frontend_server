@@ -1,23 +1,80 @@
 import { API_BASE_URL } from '/static/main.js';
 import { getUser } from '/static/scripts/authenticate.js';
 import { establishWebSocketConnection } from '/static/scripts/socket.js'; // Import the new function
+import { registerBackButtonHandler, unregisterBackButtonHandler, returnFromTerminal } from '/static/main.js';
+import { prompt } from '/static/pages/prompt.js';
 
 let ws = null;
 let terminalOutput = null;
 let terminalInput = null;
 let currentParams = {};
+let terminalBackButtonHandlerRegistered = false;
 
 function addOutput(message, type = 'info') {
     if (!terminalOutput) return;
+
+    // Map error type to terminal type for consistent white color
+    const displayType = type === 'error' ? 'terminal' : type;
+
     const line = document.createElement('div');
-    line.textContent = message;
-    line.className = `terminal-line terminal-${type}`;
+    line.className = `terminal-line terminal-${displayType}`;
+
+    // Convert URLs to clickable links
+    const urlRegex = /(https?:\/\/[^\s]+)/g;
+    const parts = message.split(urlRegex);
+
+    // If no URLs found, just add the plain text
+    if (parts.length === 1) {
+        line.textContent = message;
+    } else {
+        // Create document fragment with mixed text and links
+        const fragment = document.createDocumentFragment();
+        parts.forEach((part, index) => {
+            if (index % 2 === 1) { // This is a URL
+                const link = document.createElement('a');
+                link.href = part;
+                link.textContent = part;
+                link.target = '_blank';
+                link.rel = 'noopener noreferrer';
+                link.style.color = '#00aaff'; // Blue color for links
+                link.style.textDecoration = 'underline';
+                fragment.appendChild(link);
+            } else if (part) { // Non-empty text part
+                const textNode = document.createTextNode(part);
+                fragment.appendChild(textNode);
+            }
+        });
+        line.appendChild(fragment);
+    }
+
     terminalOutput.appendChild(line);
     terminalOutput.scrollTop = terminalOutput.scrollHeight; // Auto-scroll
 }
 
 // Expose addOutput globally for use by other modules
 window.addOutputToTerminal = addOutput;
+
+// Terminal-specific back button handler with confirmation prompt
+function handleTerminalBackButton() {
+    console.log('Terminal back button clicked - showing confirmation prompt');
+
+    const promptConfig = {
+        text: "Are you sure you want to exit? (You can access this deployment later from the resources menu)",
+        type: 'confirm',
+        id: 'terminal_exit_confirm'
+    };
+
+    prompt(promptConfig, (result) => {
+        if (result && result.status === 'answered' && result.value === true) {
+            // User confirmed exit - close connection gracefully and return to menu
+            console.log('User confirmed exit - closing terminal connection and returning to menu');
+            returnFromTerminal();
+        } else {
+            // User cancelled - stay in terminal
+            console.log('User cancelled exit - staying in terminal');
+        }
+    });
+}
 
 // Function to update cursor position based on input text
 function updateCursorPosition() {
@@ -67,6 +124,20 @@ export function initializeTerminal(params) {
         return Promise.reject(new Error("Terminal HTML elements not found!"));
     }
 
+    // Dynamically calculate header height and set CSS custom property
+    const headerContainer = document.getElementById('header-container');
+    if (headerContainer) {
+        const headerHeight = headerContainer.offsetHeight;
+        const consoleContainer = document.getElementById('console-container');
+        if (consoleContainer) {
+            consoleContainer.style.setProperty('--header-height', `${headerHeight}px`);
+        }
+    }
+
+    // Register terminal-specific back button handler
+    registerBackButtonHandler('terminal', handleTerminalBackButton);
+    terminalBackButtonHandlerRegistered = true;
+
     terminalInput.addEventListener('keypress', handleInput);
     terminalInput.addEventListener('input', updateCursorPosition); // Update cursor on all input changes
     terminalInput.addEventListener('keyup', updateCursorPosition); // Update cursor on keyup (for backspace, delete, etc.)
@@ -108,7 +179,15 @@ export function initializeTerminal(params) {
                 let styleType = messageData.type || 'message';
                 if (styleType === 'error') styleType = 'error';
                 if (styleType === 'terminal') styleType = 'terminal';
-                addOutput(messageData.content, styleType);
+                
+                // Check if content is an object with a 'text' property, or just a string
+                const messageText = (typeof messageData.content === 'object' && messageData.content !== null && messageData.content.text)
+                    ? messageData.content.text
+                    : (typeof messageData.content === 'object' && messageData.content !== null)
+                        ? JSON.stringify(messageData.content)
+                        : messageData.content;
+                
+                addOutput(messageText, styleType);
             } else {
                 // Fallback: treat raw JSON string as message
                 addOutput(event.data, 'message');
@@ -210,4 +289,10 @@ export function cleanupTerminal() {
     currentParams = {}; // Clear stored params
     terminalOutput = null;
     terminalInput = null;
+
+    // Unregister terminal back button handler
+    if (terminalBackButtonHandlerRegistered) {
+        unregisterBackButtonHandler('terminal');
+        terminalBackButtonHandlerRegistered = false;
+    }
 }

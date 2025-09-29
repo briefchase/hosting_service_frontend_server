@@ -40,7 +40,7 @@ export function establishWebSocketConnection(targetWebsocketPath, onOpen, onMess
             }
         }
 
-        if (statusCallback) statusCallback(`Connecting to WebSocket: ${socketUrl}...`, 'info');
+        if (statusCallback) statusCallback('Connecting to server…', 'info');
 
         const ws = new WebSocket(socketUrl);
 
@@ -62,8 +62,7 @@ export function establishWebSocketConnection(targetWebsocketPath, onOpen, onMess
 
         ws.onclose = (event) => {
             if (statusCallback) {
-                const reason = event.reason ? `Reason: ${event.reason}` : 'No specific reason provided.';
-                statusCallback(`WebSocket connection closed. Code: ${event.code}. ${reason}`, event.wasClean ? 'info' : 'warning');
+                // Suppress close message to avoid noisy UI
             }
             if (onClose) onClose(event);
         };

@@ -78,7 +78,8 @@ function generateListItemsHTML(items) {
             className += ' menu-actionable'; // For hover/cursor styling
         }
 
-        return `<li${itemId} class="${className}"${allDataAttrs}>${item.text}</li>`;
+        const text = (item.text === undefined || item.text === null || item.text === '') ? '&nbsp;' : item.text;
+        return `<li${itemId} class="${className}"${allDataAttrs}>${text}</li>`;
     }).join('');
 }
 
@@ -260,6 +261,8 @@ export async function renderMenu(menuIdOrConfig) {
     // Find the dedicated list container and update its HTML
     const listContainer = menuContainerElement.querySelector('#menu-list-container');
     if (listContainer) {
+        // Clear any prior status when navigating
+        clearStatusDisplay();
         listContainer.innerHTML = generateMenuHTML(menuConfig, menuId);
     } else {
         console.error("Could not find #menu-list-container within #menu-container.");
@@ -269,24 +272,12 @@ export async function renderMenu(menuIdOrConfig) {
 
     // After rendering, check if there's an onRender callback for the menu
     if (typeof menuConfig.onRender === 'function') {
-        // We wrap this in a timeout to allow the DOM to update first from the render
-        // This is a bit of a hack; a more robust solution might use MutationObserver or a framework
-        setTimeout(async () => {
-            try {
-                // Re-find the menu in case it was modified by another process
-                const currentRenderedMenuId = menuContainerElement.querySelector('.menu')?.id;
-                // Only execute if the user is still on the same menu
-                if (currentRenderedMenuId === menuId) {
-                    await menuConfig.onRender();
-                    // Re-render the menu to show the updated state from the callback
-                    renderMenu(menuId);
-                } else {
-                    console.log(`onRender for ${menuId} skipped; user navigated to ${currentRenderedMenuId}.`);
-                }
-            } catch (error) {
-                console.error(`Error during onRender callback for menu "${menuId}":`, error);
-            }
-        }, 0);
+        try {
+            await menuConfig.onRender();
+            // Avoid immediate re-render to preserve listeners and clickability
+        } catch (error) {
+            console.error(`Error during onRender callback for menu "${menuId}":`, error);
+        }
     }
 }
 
@@ -431,7 +422,21 @@ export function updateStatusDisplay(message, type = 'info') {
     } else { // 'info' or other types
         statusElement.classList.add('menu-status-info');
     }
-    console.log(`[MenuStatus][${type.toUpperCase()}] ${message}`);
+    // Keep console output concise and avoid leaking IDs/URLs
+    const condensed = typeof message === 'string' ? message
+        .replace(/\b\w{8}-\w{4}-\w{4}-\w{4}-\w{12}\b/g, '[id]')
+        .replace(/wss?:\/\/[^\s)]+/g, '[url]')
+        : message;
+    console.log(`[Status][${type}]`, condensed);
+}
+// Clear status helper
+export function clearStatusDisplay() {
+    if (!menuContainerElement) return;
+    let statusElement = menuContainerElement.querySelector('#menu-status-message');
+    if (statusElement) {
+        statusElement.textContent = '';
+        statusElement.className = 'menu-status-message';
+    }
 }
 // --- Status Display Function --- END ---
 
@@ -464,6 +469,47 @@ export function cleanupCurrentMenu() {
         }
         currentMenuId = null;
     }
+}
+
+// Re-apply header back button state based on the current menu configuration
+export function refreshHeaderButtonsForCurrentMenu() {
+    try {
+        const backButton = document.getElementById('back-button');
+        const accountButton = document.getElementById('account-button');
+        const menuConfig = menus[currentMenuId];
+
+        if (backButton) {
+            if (menuConfig && menuConfig.backTarget) {
+                backButton.style.display = 'inline-block';
+                backButton.dataset.targetMenu = menuConfig.backTarget;
+            } else if (currentMenuId === 'dashboard-menu') {
+                backButton.style.display = 'inline-block';
+                delete backButton.dataset.targetMenu;
+            } else {
+                backButton.style.display = 'none';
+                delete backButton.dataset.targetMenu;
+            }
+        }
+
+        if (accountButton) {
+            if (currentMenuId === 'account-menu') {
+                accountButton.style.display = 'none';
+                delete accountButton.dataset.targetMenu;
+            } else {
+                accountButton.style.display = 'inline-block';
+                if (currentLoginState && !currentLoginState.guest) {
+                    accountButton.textContent = 'account';
+                    accountButton.dataset.targetMenu = 'account-menu';
+                } else {
+                    accountButton.textContent = 'authenticate';
+                    delete accountButton.dataset.targetMenu;
+                }
+            }
+        }
+
+        // Re-run header collision check
+        checkHeaderCollision();
+    } catch (_) {}
 }
 
 // Exported function to initialize the menu
@@ -523,20 +569,21 @@ export function initializeMenu(containerElement, handlers, userState) {
                  return; // Handled
             }
 
-            // Then handle dynamic menu item clicks (LI elements)
-            if (target.tagName !== 'LI' || (!target.dataset.targetMenu && !target.dataset.action)) {
-                // If it's not a LI, or it is but has no action/nav attributes, ignore it.
-                return;
-            }
+            // Then handle dynamic menu item clicks (LI elements) using closest to support nested clicks/text nodes
+            const li = (target && target.closest) ? target.closest('li') : null;
+            if (!li) return;
+            if (!li.dataset.targetMenu && !li.dataset.action) return;
 
-            const targetMenu = target.dataset.targetMenu;
-            const action = target.dataset.action;
-            const resourceId = target.dataset.resourceId;
-            const directive = target.dataset.directive;
-            const returnPage = target.dataset.returnPage;
-            const returnMenu = target.dataset.returnMenu;
+            const targetMenu = li.dataset.targetMenu;
+            const action = li.dataset.action;
+            const resourceId = li.dataset.resourceId;
+            const directive = li.dataset.directive;
+            const returnPage = li.dataset.returnPage;
+            const returnMenu = li.dataset.returnMenu;
 
             if (targetMenu) {
+                // Clear status before navigating to a new menu
+                try { clearStatusDisplay(); } catch (_) {}
                 console.log(`Navigating to menu: ${targetMenu}`);
                 renderMenu(targetMenu);
             } else if (action) {

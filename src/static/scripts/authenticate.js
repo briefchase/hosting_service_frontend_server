@@ -1,10 +1,10 @@
 // Import the API base URL
 import { fetchWithAuth, API_BASE_URL } from '/static/main.js';
 import { updateStatusDisplay } from '/static/pages/menu.js';
+import { GCP_SCOPES, PEOPLE_PHONE_SCOPE } from '/static/scripts/scopes.js';
 
 // --- Configuration ---
 const GOOGLE_CLIENT_ID = "320840986458-539gugqm3d618e30s6qcottnu8goh5p1.apps.googleusercontent.com";
-const GCP_SCOPES = "https://www.googleapis.com/auth/cloud-platform";
 
 // --- Global variables ---
 let codeClient = null;
@@ -56,10 +56,17 @@ async function handleAuthResponse(response, statusContainer) {
         let errorMsg = `Backend authentication failed: ${response.status}`;
         try {
             const errorData = await response.json();
-            errorMsg += ` - ${errorData.error || 'Unknown error'}`;
-        } catch (e) { /* Ignore */ }
+            const details = errorData.details || '';
+            errorMsg += ` - ${errorData.error || 'Unknown error'}` + (details ? `\nDetails: ${details}` : '');
+            console.error('[Auth][Frontend] Backend error payload:', errorData);
+        } catch (e) {
+            try {
+                const text = await response.text();
+                errorMsg += ` - ${text}`;
+            } catch(_) { /* Ignore */ }
+        }
         console.error(errorMsg);
-        statusContainer.innerHTML = `<p style="color:red;">${errorMsg}. Please try again.</p>`;
+        statusContainer.innerHTML = `<p style="color:red;">${errorMsg.replace(/\n/g, '<br>')}</p>`;
     }
 }
 
@@ -85,21 +92,29 @@ export function initializeGoogleSignIn(statusContainer, successCallback) {
 
     try {
         // Initialize the Google OAuth 2.0 Code Client
+        const dynamicRedirectUri = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
+            ? 'http://localhost:8080'
+            : window.location.origin;
+        console.log('[Auth][Frontend] Using redirect_uri for Google Code flow:', dynamicRedirectUri);
+        console.log('[Auth][Frontend] API endpoint for auth:', `${API_BASE_URL}/authenticate`);
+
         codeClient = window.google.accounts.oauth2.initCodeClient({
             client_id: GOOGLE_CLIENT_ID,
-            scope: `openid email profile ${GCP_SCOPES} https://www.googleapis.com/auth/user.phonenumbers.read`,
+            scope: `openid https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile ${GCP_SCOPES} ${PEOPLE_PHONE_SCOPE}`,
+            prompt: 'consent',
             ux_mode: 'popup',
-            redirect_uri: 'http://localhost:8080',
+            redirect_uri: dynamicRedirectUri,
             callback: async (response) => {
                 statusContainer.innerHTML = ''; // Clear status on new attempt
                 console.log("Received authorization code from Google:", response.code ? response.code.substring(0, 10) + '...' : 'Error/Cancelled');
                 if (response.code) {
                     statusContainer.innerHTML = '<p>Authenticating with server...</p>'; // Indicate progress
                     try {
+                        console.log('[Auth][Frontend] Posting auth code to backend with Origin:', window.location.origin);
                         const backendResponse = await fetch(`${API_BASE_URL}/authenticate`, {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ authorization_code: response.code }),
+                            body: JSON.stringify({ authorization_code: response.code, redirect_origin: window.location.origin }),
                         });
                         await handleAuthResponse(backendResponse, statusContainer);
                     } catch (error) {
@@ -168,10 +183,10 @@ export function getUser() {
  * @returns {Function} An async function that takes a `params` object and executes the guarded action.
  */
 export function requireAuthAndSubscription(actionFn, actionName) {
-    return async function(params) {
+    const guarded = async function(params) {
         // Destructure all required functions and elements from params
         const { menuContainer, renderMenu, updateStatusDisplay } = params;
-        
+
         if (!updateStatusDisplay) {
             console.error("PANIC: updateStatusDisplay was not provided to requireAuthAndSubscription. Cannot proceed.");
             // Show a native alert as a last resort because the UI is unavailable.
@@ -184,10 +199,15 @@ export function requireAuthAndSubscription(actionFn, actionName) {
         // 1. Authentication Check
         if (!user) {
             updateStatusDisplay(`please sign in to ${actionName}`, 'info');
+            // Store the original action for re-execution after successful auth (only if not already set)
+            if (typeof window !== 'undefined' && !window.pendingReauthAction) {
+                // Re-run the guarded wrapper after auth, not the inner actionFn
+                window.pendingReauthAction = { actionFn: guarded, params };
+            }
             const onLoginSuccess = () => {
                 updateStatusDisplay('', 'info');
-                // After login, re-attempt the guarded action.
-                requireAuthAndSubscription(actionFn, actionName)(params);
+                // After login, re-execute the guarded flow with original params
+                try { guarded(params); } catch(_) {}
             };
             const statusContainer = menuContainer.querySelector('#menu-status-message') || menuContainer;
             initializeGoogleSignIn(statusContainer, onLoginSuccess);
@@ -197,7 +217,7 @@ export function requireAuthAndSubscription(actionFn, actionName) {
 
         // 2. Subscription Check
         try {
-            updateStatusDisplay("checking subscription status...", "info");
+            updateStatusDisplay("Checking subscription status…", "info");
             const response = await fetchWithAuth(`${API_BASE_URL}/subscription-status`);
             if (!response.ok) {
                 const errorData = await response.json().catch(() => ({})); // try to get error details
@@ -215,12 +235,35 @@ export function requireAuthAndSubscription(actionFn, actionName) {
                 return; // Stop execution
             }
 
-            // 3. All checks passed, execute the original action
+            // 3. ToS acceptance check before executing the action
+            try {
+                const statusContainer = (menuContainer && (menuContainer.querySelector('#menu-status-message') || menuContainer)) || null;
+                const { ensureGcpTosAccepted } = await import('/static/scripts/popup.js');
+                const accepted = await ensureGcpTosAccepted({ statusEl: statusContainer });
+                if (!accepted) {
+                    updateStatusDisplay('Please accept Google Cloud Terms to continue.', 'warning');
+                    return;
+                }
+            } catch (e) {
+                console.error('ToS acceptance check failed:', e);
+                updateStatusDisplay('Could not verify Google Cloud Terms acceptance.', 'error');
+                return;
+            }
+
+            // 4. All checks passed, execute the original action
             updateStatusDisplay('', 'info'); // Clear status message
             await actionFn(params);
 
         } catch (error) {
             console.error(`Error during subscription check for ${actionName}:`, error);
+            if (error && error.message === 'ReauthInitiated') {
+                // Store the original action for re-execution after successful reauth (only if not already set)
+                if (typeof window !== 'undefined' && !window.pendingReauthAction) {
+                    window.pendingReauthAction = { actionFn: guarded, params };
+                }
+                // Suppress user-facing error and wait for re-execution.
+                return;
+            }
             updateStatusDisplay(`unable to verify subscription: ${error.message}`, "error");
             // Optionally, render an error menu
             if (renderMenu) {
@@ -233,6 +276,7 @@ export function requireAuthAndSubscription(actionFn, actionName) {
             }
         }
     };
+    return guarded;
 }
 
 // Note: These functions are now globally accessible.

@@ -22,7 +22,7 @@ function generateInstanceDetailsMenu(instanceId) {
         { id: `details-zone-${instance.id}`, text: `Zone: ${instance.zone || 'Unknown'}`, type: 'record' },
         { id: `details-machine-${instance.id}`, text: `Machine: ${instance.machine_type || 'Unknown'}`, type: 'record' },
         { id: `connect-${instance.id}`, text: 'connect', type: 'button', action: 'loadTerminalView', resourceId: instance.id },
-        { id: `vm-destroy-${instance.id}`, text: 'destroy', type: 'button' }
+        { id: `vm-destroy-${instance.id}`, text: 'destroy', type: 'button', action: 'destroyInstance', resourceId: instance.id }
             ];
     return {
         id: `instance-details-menu-${instance.id}`,
@@ -105,3 +105,34 @@ function instanceDetailsMenuId(id) {
 
 // Export the guarded function as the main action handler.
 export const listInstances = requireAuthAndSubscription(_listInstancesLogic, 'view instances'); 
+
+// Action handler to destroy a VM instance
+export async function destroyInstance(params) {
+    try {
+        const { resourceId } = params;
+        if (!resourceId) {
+            updateStatusDisplay('missing instance id', 'error');
+            return;
+        }
+        const instance = fetchedInstances.find(i => i.id === resourceId && i.type === 'vm');
+        if (!instance || !instance.project_id) {
+            updateStatusDisplay('missing project id for instance', 'error');
+            return;
+        }
+        updateStatusDisplay('destroying...', 'info');
+        const response = await fetchWithAuth(`${API_BASE_URL}/destroy`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ project_id: instance.project_id, deployment: instance.deployment })
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.error || 'failed to destroy');
+        updateStatusDisplay('destroy requested', 'success');
+        // Refresh instances list
+        await _listInstancesLogic({ renderMenu });
+        updateStatusDisplay('', 'info');
+    } catch (e) {
+        console.error('destroy error:', e);
+        updateStatusDisplay(`could not destroy: ${e.message}`, 'error');
+    }
+}

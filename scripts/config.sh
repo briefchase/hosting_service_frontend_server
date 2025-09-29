@@ -29,15 +29,25 @@ CFG_HTTPS_PORT=""
 CFG_CONFIRM_APPLY="n"
 CFG_DEPLOYMENT_NAME=""
 
+# Helper function to check for jq
+check_jq() {
+    if ! command -v jq &> /dev/null; then
+        echo "Error: jq is not installed. Please install jq to manage configuration." >&2
+        return 1
+    fi
+    return 0
+}
+
 # Load saved configuration
 load_config() {
     if [ -f "$JSON_CONFIG_FILE" ]; then
-        CFG_SSL_EMAIL=$(jq -r '.ssl_email' "$JSON_CONFIG_FILE")
-        CFG_EXTERNAL_URL=$(jq -r '.external_url' "$JSON_CONFIG_FILE")
-        CFG_HTTP_PORT=$(jq -r '.http_port' "$JSON_CONFIG_FILE")
-        CFG_HTTPS_PORT=$(jq -r '.https_port' "$JSON_CONFIG_FILE")
-        CFG_CONFIRM_APPLY=$(jq -r '.confirm_apply' "$JSON_CONFIG_FILE")
-        CFG_DEPLOYMENT_NAME=$(jq -r '.deployment_name' "$JSON_CONFIG_FILE")
+        if ! check_jq; then return 1; fi
+        CFG_SSL_EMAIL=$(jq -r '.ssl_email // ""' "$JSON_CONFIG_FILE")
+        CFG_EXTERNAL_URL=$(jq -r '.external_url // ""' "$JSON_CONFIG_FILE")
+        CFG_HTTP_PORT=$(jq -r '.http_port // ""' "$JSON_CONFIG_FILE")
+        CFG_HTTPS_PORT=$(jq -r '.https_port // ""' "$JSON_CONFIG_FILE")
+        CFG_CONFIRM_APPLY=$(jq -r '.confirm_apply // ""' "$JSON_CONFIG_FILE")
+        CFG_DEPLOYMENT_NAME=$(jq -r '.deployment_name // ""' "$JSON_CONFIG_FILE")
     elif [ -f "$CONFIG_FILE" ]; then
         source "$CONFIG_FILE"
     fi
@@ -45,16 +55,26 @@ load_config() {
 
 # Save configuration
 save_config() {
-    cat > "$CONFIG_FILE" <<EOF
-# Apache deployment configuration
-CFG_SSL_EMAIL="$CFG_SSL_EMAIL"
-CFG_EXTERNAL_URL="$CFG_EXTERNAL_URL"
-CFG_HTTP_PORT="$CFG_HTTP_PORT"
-CFG_HTTPS_PORT="$CFG_HTTPS_PORT"
-CFG_CONFIRM_APPLY="$CFG_CONFIRM_APPLY"
-CFG_DEPLOYMENT_NAME="$CFG_DEPLOYMENT_NAME"
-EOF
-    echo "Configuration saved to $CONFIG_FILE"
+    if ! check_jq; then return 1; fi
+
+    local json_content
+    json_content=$(jq -n \
+        --arg email "$CFG_SSL_EMAIL" \
+        --arg url "$CFG_EXTERNAL_URL" \
+        --arg http "$CFG_HTTP_PORT" \
+        --arg https "$CFG_HTTPS_PORT" \
+        --arg apply "$CFG_CONFIRM_APPLY" \
+        --arg name "$CFG_DEPLOYMENT_NAME" \
+        '{ssl_email: $email, external_url: $url, http_port: $http, https_port: $https, confirm_apply: $apply, deployment_name: $name}')
+    
+    echo "$json_content" > "$JSON_CONFIG_FILE"
+    echo "Configuration saved to $JSON_CONFIG_FILE"
+
+    # Remove the old config file if it exists to avoid conflicts
+    if [ -f "$CONFIG_FILE" ]; then
+        rm "$CONFIG_FILE"
+        echo "Removed old configuration file: $CONFIG_FILE"
+    fi
 }
 
 # Simple configuration for local Apache deployment
@@ -107,10 +127,10 @@ configure_remote_deployment() {
         local use_domain="${use_domain_input:-n}"
 
         if [[ "$use_domain" =~ ^[Yy]$ ]]; then
-            read -p "Enter domain: " CFG_EXTERNAL_URL
+            read -p "Enter domain(s) (comma-separated): " CFG_EXTERNAL_URL
             while [ -z "$CFG_EXTERNAL_URL" ]; do
                 echo "Error: Domain cannot be empty."
-                read -p "Enter domain: " CFG_EXTERNAL_URL
+                read -p "Enter domain(s) (comma-separated): " CFG_EXTERNAL_URL
             done
         else
             # Try to get IP from Terraform
@@ -133,10 +153,10 @@ configure_remote_deployment() {
             fi
             
             if [ -z "$CFG_EXTERNAL_URL" ]; then
-                read -p "Enter external IP or domain: " CFG_EXTERNAL_URL
+                read -p "Enter external IP or domain(s) (comma-separated): " CFG_EXTERNAL_URL
                 while [ -z "$CFG_EXTERNAL_URL" ]; do
                     echo "Error: External URL cannot be empty."
-                    read -p "Enter external IP or domain: " CFG_EXTERNAL_URL
+                    read -p "Enter external IP or domain(s) (comma-separated): " CFG_EXTERNAL_URL
                 done
             fi
         fi

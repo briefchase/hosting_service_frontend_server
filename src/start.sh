@@ -83,7 +83,7 @@ install_stack() {
     -o Dpkg::Options::="--force-confdef" \
     -o Dpkg::Options::="--force-confold" \
     -o Dpkg::Options::="--force-confnew" \
-    install apache2 php libapache2-mod-php certbot python3-certbot-apache wget jq || {
+    install apache2 php libapache2-mod-php certbot python3-certbot-apache wget jq curl dnsutils || {
     log "Warning: Package installation timed out or failed, attempting recovery..."
     
     # Kill any hanging processes
@@ -136,6 +136,77 @@ install_stack() {
 
   systemctl restart apache2
   log "Apache configuration restarted"
+}
+
+configure_vhost() {
+    local deploy_dir="/tmp/apache_deploy"
+    local config_file="$deploy_dir/deploy_config.json"
+    local vhost_file="/etc/apache2/sites-available/hoster.conf"
+
+    log "Configuring Apache virtual host..."
+
+    if [[ ! -f "$config_file" ]]; then
+        log "Deployment config not found. Skipping vhost configuration."
+        return 0
+    fi
+
+    local domains_str
+    domains_str=$(jq -r '.domain // empty' "$config_file" 2>/dev/null || echo "")
+
+    if [[ -z "$domains_str" ]] || [[ "$domains_str" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        log "No domain specified or IP address provided. Skipping vhost configuration."
+        return 0
+    fi
+
+    IFS=',' read -ra DOMAINS <<< "$domains_str"
+    local primary_domain="${DOMAINS[0]}"
+    local server_aliases=""
+    if [[ ${#DOMAINS[@]} -gt 1 ]]; then
+        server_aliases="ServerAlias"
+        for i in "${!DOMAINS[@]}"; do
+            if [[ $i -gt 0 ]]; then
+                server_aliases+=" ${DOMAINS[$i]}"
+            fi
+        done
+    fi
+    
+    local ssl_email
+    ssl_email=$(jq -r '.ssl_email // "admin@example.com"' "$config_file" 2>/dev/null)
+
+    log "Creating new vhost config at $vhost_file"
+    log "Setting ServerName to $primary_domain"
+    if [[ -n "$server_aliases" ]]; then
+        log "Setting $server_aliases"
+    fi
+    
+    cat > "$vhost_file" <<EOF
+<VirtualHost *:80>
+    ServerAdmin $ssl_email
+    DocumentRoot /var/www/html
+    ServerName $primary_domain
+    $server_aliases
+
+    ErrorLog \${APACHE_LOG_DIR}/error.log
+    CustomLog \${APACHE_LOG_DIR}/access.log combined
+</VirtualHost>
+EOF
+
+    log "Disabling default Apache site..."
+    a2dissite 000-default.conf || log "Warning: failed to disable default site."
+
+    log "Enabling new 'hoster' site..."
+    a2ensite hoster.conf || {
+        log "ERROR: failed to enable hoster.conf."
+        return 1
+    }
+
+    log "Reloading Apache configuration..."
+    if ! systemctl reload apache2; then
+        log "ERROR: 'systemctl reload apache2' command failed."
+        systemctl status apache2 --no-pager || true
+        journalctl -u apache2 -n 50 --no-pager || true
+        return 1
+    fi
 }
 
 create_index_page() {
@@ -206,24 +277,68 @@ configure_ssl() {
   
   # Check if we have a domain configuration
   if [ -f "$config_file" ]; then
-    local domain=$(jq -r '.domain // empty' "$config_file" 2>/dev/null || echo "")
+    local domains_str=$(jq -r '.domain // empty' "$config_file" 2>/dev/null || echo "")
     local ssl_email=$(jq -r '.ssl_email // empty' "$config_file" 2>/dev/null || echo "")
     
-    if [ -n "$domain" ] && [ -n "$ssl_email" ] && [[ ! "$domain" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-      log "Configuring SSL certificate for domain: $domain"
-      
-      # Run certbot to get SSL certificate
-      certbot --apache -d "$domain" --email "$ssl_email" --agree-tos --non-interactive --redirect || {
-        log "Warning: SSL certificate configuration failed. Site will run on HTTP."
-        return 1
-      }
-      
-      log "SSL certificate configured successfully for $domain"
+    if [ -z "$domains_str" ] || [ -z "$ssl_email" ] || [[ "$domains_str" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+      log "No domains to configure or an IP address was provided. Skipping SSL setup."
       return 0
     fi
+      
+    log "Performing DNS pre-flight check for domains: $domains_str"
+    
+    # Get server's public IP
+    local server_ip
+    server_ip=$(curl -s http://checkip.amazonaws.com || curl -s ifconfig.me)
+    if [ -z "$server_ip" ]; then
+        log "Warning: Could not determine server's public IP. Skipping SSL validation."
+        return 0
+    fi
+    log "Server public IP: $server_ip"
+    
+    local valid_domains=()
+    local domain_args=""
+    
+    IFS=',' read -ra DOMAINS <<< "$domains_str"
+    for d in "${DOMAINS[@]}"; do
+      local domain_ip
+      domain_ip=$(dig +short "$d" A | head -n1)
+      
+      if [ "$domain_ip" == "$server_ip" ]; then
+        log "DNS OK: '$d' points to this server ($server_ip)."
+        valid_domains+=("$d")
+        domain_args+=" -d $d"
+      else
+        log "DNS MISMATCH: '$d' points to '$domain_ip', not '$server_ip'. Skipping."
+      fi
+    done
+    
+    if [ ${#valid_domains[@]} -eq 0 ]; then
+      log "No valid domains found pointing to this server. Skipping SSL configuration."
+      return 0
+    fi
+    
+    log "Configuring SSL for valid domains: ${valid_domains[*]}"
+    
+    # Run certbot for the validated domains
+    certbot --apache --expand $domain_args --email "$ssl_email" --agree-tos --non-interactive --redirect || {
+      log "Warning: Certbot failed for validated domains. Check logs for details."
+      return 1 # Keep this to indicate a real problem
+    }
+
+    # After successful certificate installation, enable HSTS for HTTPS responses
+    log "Enabling HSTS (1 year) on HTTPS responses..."
+    a2enmod headers || true
+    cat > /etc/apache2/conf-available/hsts.conf <<'APACHECONF'
+<IfModule mod_headers.c>
+  Header always set Strict-Transport-Security "max-age=31536000" "expr=%{HTTPS} == 'on'"
+  # Note: no includeSubDomains, as 'www' is intentionally not used
+</IfModule>
+APACHECONF
+    a2enconf hsts || true
+    systemctl reload apache2 || true
   fi
   
-  log "No domain configuration found or IP address detected. Skipping SSL setup."
   return 0
 }
 
@@ -283,17 +398,11 @@ main() {
   init_config
   update_system
   install_stack
+  configure_vhost
   create_index_page
   configure_ssl
 
   log "Apache server provisioning complete!"
-  
-  # Fetch external IP from metadata and log it
-  EXT_IP=$(curl -s -H "Metadata-Flavor: Google" \
-    "http://metadata.google.internal/computeMetadata/v1/instance/network-interfaces/0/access-configs/0/external-ip" || true)
-  if [[ -n "$EXT_IP" ]]; then
-    log "Address: http://$EXT_IP"
-  fi
 }
 
 main "$@" 
