@@ -31,7 +31,35 @@
             <span id="back-button" class="back-button" style="display: none;">&lt; back</span>
             <span id="account-button" class="account-button" style="display: none;"></span>
         </div>
-        <!-- Content (login or menu) will be loaded here -->
+        <!-- Content (landing or menu) will be loaded here -->
+        <div id="landing-view-container">
+            <div id="about-button" class="landing-option about-option">about</div>
+            <div id="console-button" class="landing-option">console</div>
+        </div>
+
+        <!-- Spotify embed is now part of the main content flow -->
+        <div id="spotify-embed-wrapper" style="display: none;">
+            <iframe id="global-spotify-embed" data-testid="embed-iframe" src="https://open.spotify.com/embed/playlist/7LDlK4VLv2RNxaQ7Z4D6qI?utm_source=generator" frameBorder="0" allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture" loading="lazy"></iframe>
+        </div>
+
+        <div class="footer-container">
+            <div class="legal-links">
+                <a href="https://briefchase.com" target="_blank" rel="noopener">© <span id="legal-year"></span> Briefchase LLC</a>&nbsp;
+                <a href="/privacy">Privacy Policy</a>&nbsp;
+                <a href="/tos">Terms of Service</a>
+            </div>
+            <div class="support-container">
+                <div class="support-text">Open 24 Hours</div>
+                <div class="support-number">
+                    <span class="rainbow-text">(305) 501-0383</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Pre-rendered mode toggle button -->
+        <div id="mode-toggle-container" style="display: none;">
+            <img id="mode-toggle-gif" alt="Mode Toggle">
+        </div>
     </div>
 
     <!-- prompt container is created dynamically by prompt.js -->

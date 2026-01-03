@@ -1,36 +1,51 @@
-/* Prompt overlay container (single element, no host wrapper) */
-#prompt-container {
+body.prompt-overlay-active::after {
+    content: '';
     position: fixed;
-    top: var(--header-height, 56px);
-    height: calc(100vh - var(--header-height, 56px));
+    top: 0;
     left: 0;
     right: 0;
-    z-index: 200; /* below header (300), above main content */
+    bottom: 0;
     background-color: rgba(0, 0, 0, 0.8);
-    /* Single scroll region */
-    overflow-y: auto;
-    overflow-x: hidden;
-    -webkit-overflow-scrolling: touch;
-    touch-action: pan-y; /* Allow vertical scroll gestures */
-    /* Prevent scroll chaining to page */
-    overscroll-behavior-y: contain; /* contain vertical only; allow horizontal gestures if needed */
-    -ms-overflow-style: none; /* IE and Edge: hide scrollbar */
-    scrollbar-width: none; /* Firefox: hide scrollbar */
-    /* Equal side/bottom spacing below the header */
-    padding: 0 20px 20px 20px;
-    box-sizing: border-box;
+    z-index: 199;
+}
+
+/* Prompt overlay container - base styles */
+#prompt-container {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 200; /* below header (300), above main content */
+    background-color: transparent;
     display: flex;
-    flex-direction: column;
-    justify-content: flex-start;
-    align-items: stretch;
-    min-height: 0; /* allow flex child to shrink for proper scrolling */
+    -webkit-overflow-scrolling: touch;
+}
+
+/* Styles for container when hosting a regular, centered prompt */
+#prompt-container.prompt-container--regular {
+    justify-content: center;
+    align-items: center;
+    padding: 20px;
+    overflow-y: auto; /* Allow scroll on small viewports if content is tall */
+}
+
+/* Styles for container when hosting the subscription/checkout prompt */
+#prompt-container.prompt-container--subscription {
+    display: block;
+    overflow: hidden; /* This container does not scroll */
+    padding: 0;
 }
 
 /* WebKit: hide scrollbar while preserving scroll */
-#prompt-container::-webkit-scrollbar {
+.prompt-content-wrapper--subscription::-webkit-scrollbar {
     width: 0;
     height: 0;
     display: none;
+}
+.prompt-content-wrapper--subscription {
+    -ms-overflow-style: none; /* IE and Edge: hide scrollbar */
+    scrollbar-width: none; /* Firefox: hide scrollbar */
 }
 
 .embedded-checkout-container::-webkit-scrollbar {
@@ -46,9 +61,8 @@
 /* duplicate rules removed; consolidated above */
 
 /* Remove dim backdrop for special prompts (e.g., subscription) */
-/* Disable dim pseudo-elements when both classes are on the same element */
-.prompt-no-dim.prompt-overlay-active::before,
-.prompt-no-dim.prompt-overlay-active::after {
+/* Disable dim pseudo-elements when both classes are on the body */
+body.prompt-no-dim.prompt-overlay-active::after {
     display: none !important;
     background: transparent !important;
 }
@@ -69,6 +83,33 @@
 .prompt-overlay-active #header-container {
     min-height: var(--header-height, 56px);
 }
+
+/* --- State-based visibility and layout adjustments --- */
+
+/* Base styles for when a full-screen overlay is active (prompt or terminal) */
+body.overlay-active {
+    overflow: hidden; /* Prevent background scrolling */
+}
+
+body.overlay-active #console-container {
+    overflow: hidden !important; /* Prevent content scrolling */
+}
+
+/* Hide header elements during overlays, but preserve layout */
+body.overlay-active #site-title,
+body.overlay-active #account-button {
+    visibility: hidden !important;
+}
+
+/* Hide main content during overlays */
+body.overlay-active #menu-container,
+body.overlay-active #main-content {
+    display: none !important;
+}
+
+/* --- End State-based styles --- */
+
+
 /* Global Resets & Base Styles */
 body {
     background-color: black;
@@ -76,30 +117,36 @@ body {
     font-family: 'Courier New', Courier, monospace;
     margin: 0;
     padding: 0;
-    height: 100vh; /* Ensure body takes full height */
+    min-height: var(--stable-vh, 100vh); /* Allow body to grow, using stable vh */
     display: flex; /* Use flexbox for overall layout */
     flex-direction: column; /* Stack header and content vertically */
+    position: relative; /* Needed for z-index stacking with pseudo-element */
+    background-image: var(--background-image);
+    background-repeat: no-repeat;
+    background-size: cover;
+    background-position: center center;
+    background-attachment: fixed; /* Keep background fixed on scroll */
 }
 
-/* Login Page Specific Styles (If landing.html is ever used directly) */
-.login-page body { /* Less relevant now, but kept for potential direct use */
+/* Landing Page Specific Styles (If landing.html is ever used directly) */
+.landing-page body { /* Less relevant now, but kept for potential direct use */
     justify-content: center;
     align-items: center;
     text-align: center;
 }
 
-.login-page #login-content {
+.landing-page #landing-content {
     position: relative;
 }
 
-.login-page .login-button-container {
+.landing-page .landing-button-container {
     display: flex;
     flex-direction: column;
     align-items: flex-start;
     gap: 10px;
 }
 
-.login-page .login-button {
+.landing-page .landing-button {
     cursor: pointer;
     padding: 10px;
     display: block;
@@ -112,38 +159,29 @@ body {
     color: white;
 }
 
-.login-page .login-button:hover {
+.landing-page .landing-button:hover {
     background-color: white;
     color: black;
 }
 
-.login-page #login-status-message {
-    position: absolute;
-    bottom: 20px;
-    left: 0;
-    right: 0;
-    text-align: center;
-    min-height: 1.2em;
-    padding: 5px;
-    color: white;
-}
-
-.login-page #login-status-message p {
-    margin: 0;
-}
 
 /* Main App Styles */
-.main-app #console-container {
+#console-container {
     flex-grow: 1; /* Allow console to fill remaining space */
     position: relative; /* Context for absolute header */
     display: flex;
     flex-direction: column; /* Stack header and dynamic content */
-    align-items: center; /* Center flex children (login/menu container) horizontally */
+    align-items: center; /* Center flex children (landing/menu container) horizontally */
     padding-top: 80px; /* Add padding to prevent content going under fixed header */
     box-sizing: border-box;
 }
 
-.main-app #header-container {
+/* Vertically center console content when deployment is loading */
+body.deployment-loading #console-container {
+    justify-content: center;
+}
+
+#header-container {
     width: 100%;
     box-sizing: border-box;
     padding: 20px 80px; /* Increased padding to keep buttons away from edge */
@@ -179,10 +217,10 @@ body.prompt-overlay-active #console-container {
 
 /* Removed empty rule for #site-title; inherits layout from header flex */
 
-/* Dynamic Content Containers (Login/Menu) */
+/* Dynamic Content Containers (Landing/Menu) */
 /* Style the containers loaded into #console-container */
-.main-app #login-view-container,
-.main-app #menu-container { /* Apply common styles */
+#landing-view-container,
+#menu-container { /* Apply common styles */
     display: flex;
     flex-direction: column;
     /* align-items: center; Removed - Parent handles container centering */
@@ -194,21 +232,22 @@ body.prompt-overlay-active #console-container {
     /* Removed align-items: center; from here */
 }
 
-/* Specific styles for login container */
-.main-app #login-view-container {
+/* Specific styles for landing container */
+#landing-view-container {
     width: 220px; /* Set specific width */
     align-items: flex-start; /* Left-align ITEMS INSIDE the container */
     /* justify-content remains center to vertically center the box */
 }
 
 /* Specific styles for menu container */
-.main-app #menu-container {
-    width: 220px; /* Match width */
+#menu-container {
+    min-width: 220px; /* Match width */
+    width: fit-content;
     align-items: center; /* Center ITEMS INSIDE the container */
 }
 
-/* Center Login Buttons */
-.main-app #login-view-container .login-button {
+/* Center Landing Buttons */
+#landing-view-container .landing-button {
     cursor: pointer;
     padding: 10px;
     border: 1px solid white;
@@ -221,13 +260,13 @@ body.prompt-overlay-active #console-container {
     color: white;
 }
 
-.main-app #login-view-container .login-button:hover {
+#landing-view-container .landing-button:hover {
     background-color: white;
     color: black;
 }
 
-/* Style Login Options as Records with Hover Effect - Updated */
-.main-app #login-view-container .login-option {
+/* Style Landing Options as Records with Hover Effect - Updated */
+#landing-view-container .landing-option {
     padding: 5px 10px; /* Reduced vertical padding, added horizontal */
     margin-bottom: 5px; /* Spacing */
     /* min-width: 220px; Removed */
@@ -237,10 +276,13 @@ body.prompt-overlay-active #console-container {
     color: white; /* Default text color */
     background-color: transparent; /* Ensure default background is transparent */
     transition: background-color 0.3s, color 0.3s;
+    -webkit-user-select: none; /* Safari */
+    -ms-user-select: none; /* IE 10+ */
+    user-select: none; /* Standard syntax */
 }
 
 /* Restore button-like hover */
-.main-app #login-view-container .login-option:hover {
+#landing-view-container .landing-option:hover {
     background-color: white; /* White background on hover */
     color: black; /* Black text on hover */
     /* text-decoration: none; Ensure no underline */
@@ -257,26 +299,69 @@ body.prompt-overlay-active #console-container {
     box-sizing: border-box;
 }
 
-/* Status Message Styling */
-.main-app #login-view-container #login-status-message {
-    min-height: 1.2em;
-    padding: 5px;
-    color: white; /* Default color */
-    margin-bottom: 15px;
-    text-align: center;
-    width: 100%; /* Take full width for centering */
+#spotify-embed-wrapper {
+    position: absolute;
+    display: none;
+    z-index: 15;
+    width: 288px;
+    height: 152px;
+    overflow: hidden;
+    border-radius: 12px;
+    /* top and left will be set by JavaScript */
 }
 
-.main-app #login-view-container #login-status-message p {
-    margin: 0;
+/* --- Spotify Embed Override --- DO NOT REMOVE THIS */
+#spotify-embed-wrapper iframe {
+    height: 152px !important;
+}
+
+
+.footer-container {
+    position: relative;
+    width: fit-content;
+    max-width: 100%;
+    margin: 0 auto; /* Center the container */
+    box-sizing: border-box;
+    padding: 0 20px; /* Add padding to prevent touching edges on very small screens */
 }
 
 /* Legal Links Styling */
 .legal-links {
     text-align: center;
     margin-top: 20px; /* Space above the links */
-    font-size: 0.8em; /* Smaller font size */
+    font-size: clamp(0.6rem, 2vw, 0.8rem); /* Responsive font size */
     margin-bottom: 18px; /* Breathing room from bottom */
+    white-space: nowrap; /* Prevent links from wrapping */
+}
+
+.support-container {
+    position: absolute;
+    top: -40px;
+    right: -10px;
+    transform: rotate(15deg);
+    font-size: 0.8em; /* Match legal text size */
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+.support-text {
+    margin-bottom: 2px;
+    font-size: 0.9em;
+    color: #aaa;
+}
+
+.support-number {
+    animation: pulse-size 2s ease-in-out infinite;
+}
+
+@keyframes pulse-size {
+    0%, 100% {
+        transform: scale(1);
+    }
+    50% {
+        transform: scale(1.05); /* Grow by 5% */
+    }
 }
 
 .legal-links a {
@@ -303,6 +388,9 @@ body.prompt-overlay-active #console-container {
     transition: background-color 0.3s, color 0.3s;
     background-color: transparent; /* Make background transparent */
     color: white;
+    -webkit-user-select: none; /* Safari */
+    -ms-user-select: none; /* IE 10+ */
+    user-select: none; /* Standard syntax */
     /* border: 1px solid white; removed */
 }
 
@@ -322,13 +410,14 @@ body.prompt-overlay-active #console-container {
 
 
 /* Main App Menu Title Styling */
-.main-app #menu-text {
+#menu-text {
     text-align: center;
     margin-bottom: 15px; /* Space above menu list */
+    white-space: nowrap;
 }
 
 /* Main App Menu List Styles */
-.main-app .menu { /* Directly within menu-container */
+.menu { /* Directly within menu-container */
     list-style: none;
     padding: 0;
     margin: 0;
@@ -339,7 +428,7 @@ body.prompt-overlay-active #console-container {
 }
 
 /* Base styles for ALL list items (buttons and records) */
-.main-app .menu li {
+.menu li {
     /* width: 100%; Removed - Apply only to buttons */
     box-sizing: border-box;
     text-align: center;
@@ -349,86 +438,88 @@ body.prompt-overlay-active #console-container {
     margin-bottom: 5px; /* Consistent spacing below items */
 }
 
+.menu-item-container {
+    width: 100%;
+    padding: 0;
+    margin-bottom: 5px;
+}
+
+.menu-horizontal-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    justify-content: flex-start;
+    gap: 5px;
+    overflow-x: auto;
+    padding-bottom: 5px; /* Add a little space for the scrollbar */
+}
+
+/* Custom scrollbar for better aesthetics */
+.menu-horizontal-list::-webkit-scrollbar {
+    height: 4px;
+}
+
+.menu-horizontal-list::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.menu-horizontal-list::-webkit-scrollbar-thumb {
+    background-color: #555;
+    border-radius: 2px;
+}
+
 /* Styles specific to Buttons */
-.main-app .menu li.menu-button {
+.menu li.menu-button {
     width: 100%; /* Make buttons take full width */
     padding: 10px 0; /* Button vertical padding */
     border: 1px solid white;
     /* margin-bottom: 5px; Moved to base li */
     cursor: pointer;
+    -webkit-user-select: none; /* Safari */
+    -ms-user-select: none; /* IE 10+ */
+    user-select: none; /* Standard syntax */
 }
 
 /* Styles specific to Records */
-.main-app .menu li.menu-record {
+.menu li.menu-record {
     width: fit-content; /* Make records fit their text */
     padding: 2px 10px; /* Minimal vertical, some horizontal padding */
+    white-space: nowrap; /* Prevent text from wrapping */
     /* margin-bottom: 0; Use base li margin */
     cursor: default;
     color: #aaa; /* Keep records slightly dimmed */
 }
 
-/* Hover effect only for Buttons */
-.main-app .menu li.menu-button:hover {
+/* Hover effect for Buttons and Records */
+.menu li.menu-button:hover,
+.menu li.menu-record:hover {
     background-color: white;
     color: black;
 }
 
-/* Remove generic hover for records or other li elements if it existed */
-/*
-.main-app .menu li.menu-record:hover {
-    background-color: white;
-    color: black;
+/* Custom style to disable hover for label-like records */
+.menu li.menu-record.label-record:hover {
+    background-color: transparent;
+    color: #aaa; /* Revert to default record color */
+    cursor: default;
 }
-*/
 
 /* Main App General Container (was .container) - Use if needed */
-.main-app .container {
+.container {
      margin: 0 auto;
      width: fit-content;
      /* color: black; Removed, inherits white from body */
 }
 
-/* Main App Menu Styles */
-.main-app .menu {
-    list-style: none;
-    padding: 0;
-    margin: 0;
-    width: 200px;
-}
-
-.main-app .menu li {
-    text-align: center;
-    transition: background-color 0.3s, color 0.3s;
-    padding: 0;
-    border: none;
-    margin-bottom: 0;
-}
-
-.main-app .menu li.menu-button {
-    padding: 10px 0;
-    border: 1px solid white;
-    margin-bottom: 5px;
-    cursor: pointer;
-}
-
-.main-app .menu li.menu-record {
-    padding: 2px 0;
-    margin-bottom: 0;
-    cursor: default;
-}
-
-.main-app .menu li.menu-button:hover,
-.main-app .menu li.menu-record:hover {
-    background-color: white;
-    color: black;
-}
-
 /* Advanced option styling: keep red text, including hover */
-#vm-option {
+#advanced-option {
     color: #ff2b2b;
     border-color: #ff2b2b;
 }
-#vm-option:hover {
+#advanced-option:hover {
     background-color: rgba(255, 43, 43, 0.15);
     color: #ff2b2b;
 }
@@ -462,6 +553,11 @@ body.prompt-overlay-active #console-container {
     display: none !important;
 }
 
+#menu-status-message {
+    white-space: nowrap;
+    text-align: center;
+}
+
 /* Hide menu status message when empty */
 #menu-status-message:empty {
     display: none;
@@ -470,14 +566,20 @@ body.prompt-overlay-active #console-container {
 /* Loading GIF styles */
 .loading-gif {
     display: block;
-    margin: 40px auto; /* Add some top margin and center it horizontally */
+    margin: 0 auto; /* Center it horizontally */
     width: 150px;      /* Set a reasonable width */
     height: auto;      /* Maintain aspect ratio */
 }
 
 /* Rainbow text animation */
 .rainbow-text {
+    opacity: 0;
+    transition: opacity 0.2s ease-in;
+}
+
+.rainbow-text > span {
     animation: rainbow-cycle 2s linear infinite;
+    animation-fill-mode: backwards; /* Apply the first keyframe's style before the animation starts */
 }
 
 @keyframes rainbow-cycle {
@@ -494,39 +596,89 @@ body.prompt-overlay-active #console-container {
 /* Mockup pulse animation */
 @keyframes mockupPulse {
     0%, 100% {
-        transform: rotate(15deg) scale(0.9);
+        transform: rotate(15deg) scale(0.95);
     }
     50% {
-        transform: rotate(15deg) scale(0.95);
+        transform: rotate(15deg) scale(1.05);
     }
 }
 
+#mode-toggle-container {
+    position: absolute;
+    width: 80px;
+    height: 80px;
+    z-index: 25;
+    cursor: pointer;
+    transform: rotate(-15deg);
+    /* Center the image inside */
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    /* Disable the blue tap highlight on mobile */
+    -webkit-tap-highlight-color: transparent;
+}
+
+#mode-toggle-gif {
+    /* Allow the image to shrink if needed, but not grow beyond container */
+    max-width: 100%;
+    max-height: 100%;
+}
+
+
 /* Alternative approach - separate transform and animation */
 #landing-mockup-img {
-    animation: mockupPulse 3s ease-in-out infinite;
+    animation: mockupPulse 2s ease-in-out infinite;
 }
 
 /* Add other styles for your application below */
 
 /* --- Prompt Styles --- */
 
-.prompt-wrapper {
+.prompt-image {
+    width: 300px;
+    height: auto;
+    margin-bottom: 1em;
+}
+
+body.prompt-overlay-active {
+    overflow: hidden;
+}
+
+.prompt-content-wrapper {
     display: flex;
-    flex-direction: column; /* Default to vertical stacking */
-    align-items: center;
-    justify-content: flex-start;
-    padding: 20px;
+    flex-direction: column;
     background-color: black;
     border: 1px solid white;
-    max-width: none; /* Allow full-width */
-    width: 100%; /* Fill available width */
-    box-sizing: border-box; /* Include padding in width */
-    margin: 0; /* Container padding handles spacing */
-    /* Let the container (not wrapper) handle scrolling to avoid nested scrollbars */
-    max-height: none;
-    overflow: visible;
-    flex: 1 1 auto; /* Fill available height of #prompt-container */
-    min-height: 0; /* Allow flex child to shrink for proper scrolling */
+    padding: 20px;
+    box-sizing: border-box;
+}
+
+.prompt-content-wrapper--regular {
+    max-width: 400px;
+    width: 100%;
+    height: auto;
+    align-items: center;
+    justify-content: flex-start;
+}
+
+.prompt-content-wrapper--subscription {
+    /* Most styles are applied inline from prompt.js for this variant */
+    position: relative;
+    top: var(--header-height, 56px);
+    height: calc(100vh - var(--header-height, 56px) - 20px);
+    overflow-y: auto;
+    overflow-x: hidden;
+    margin: 0 20px 20px 20px;
+    width: auto;
+    border: none;
+    padding: 20px;
+}
+
+@media (max-width: 420px) {
+    .prompt-content-wrapper--subscription {
+        padding-left: 10px;
+        padding-right: 10px;
+    }
 }
 
 .prompt-text {
@@ -600,6 +752,9 @@ body.prompt-overlay-active #console-container {
     font-family: 'Courier New', Courier, monospace;
     transition: background-color 0.3s, color 0.3s;
     white-space: nowrap;
+    -webkit-user-select: none; /* Safari */
+    -ms-user-select: none; /* IE 10+ */
+    user-select: none; /* Standard syntax */
 }
 
 .prompt-button:hover,
@@ -612,6 +767,47 @@ body.prompt-overlay-active #console-container {
     display: flex;
     flex-direction: column;
     gap: 10px;
+}
+
+.prompt-form {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+.prompt-form-item {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    margin-bottom: 10px;
+}
+
+.prompt-form-item label {
+    margin-bottom: 5px;
+    text-align: left;
+}
+
+.prompt-form select {
+    background-color: black;
+    color: white;
+    border: 1px solid white;
+    padding: 8px 12px;
+    cursor: pointer;
+    font-family: 'Courier New', Courier, monospace;
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    appearance: none;
+    background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='white' width='18px' height='18px'%3e%3cpath d='M7 10l5 5 5-5z'/%3e%3c/svg%3e");
+    background-repeat: no-repeat;
+    background-position: right 8px center;
+    width: 100%;
+}
+
+.prompt-form select:hover {
+    background-color: white;
+    color: black;
+    background-image: url("data:image/svg+xml;charset=UTF-8,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='black' width='18px' height='18px'%3e%3cpath d='M7 10l5 5 5-5z'/%3e%3c/svg%3e");
 }
 
 /* Embedded checkout should fill available height inside the prompt */
@@ -628,7 +824,8 @@ body.prompt-overlay-active #console-container {
 /* Terminal Styles */
 #terminal-view {
     width: 100%;
-    height: 100%;
+    max-width: 1200px; /* Max width for large screens */
+    height: calc(100vh - (2 * var(--header-height))); /* Fill the container */
     background-color: black;
     color: white;
     font-family: 'Courier New', Courier, monospace;
@@ -637,20 +834,11 @@ body.prompt-overlay-active #console-container {
     box-sizing: border-box;
     display: flex;
     flex-direction: column;
-    /* Center terminal in available space */
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    transform: translate(-50%, -50%);
-    /* Make terminal responsive to header height */
-    max-width: calc(100vw - 40px);
-    max-height: calc(100vh - var(--header-height, 80px) - 40px);
 }
 
 #terminal-output {
     flex: 1;
     overflow-y: auto;
-    margin-bottom: 10px;
     white-space: pre-wrap;
     word-break: break-word;
     font-size: 14px;
@@ -696,7 +884,6 @@ body.prompt-overlay-active #console-container {
     align-items: baseline;
     margin-top: 10px;
     position: relative;
-    margin-top: auto; /* Push input to bottom of terminal */
 }
 
 #terminal-input {
@@ -751,14 +938,15 @@ body.prompt-overlay-active #console-container {
 }
 
 /* Terminal view specific body styles */
-body.terminal-view-active {
-    overflow: hidden; /* Prevent scrolling when terminal is active */
-}
-
 body.terminal-view-active #console-container {
-    position: relative; /* Allow absolute positioning of terminal */
-    height: 100vh;
-    overflow: hidden;
-    /* Set CSS custom property for header height */
-    --header-height: 80px;
+    padding-top: var(--header-height);
+    padding-bottom: var(--header-height);
+    padding-left: 20px;
+    padding-right: 20px;
+    box-sizing: border-box;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    height: auto; /* Let flexbox control height */
+    flex-grow: 1; /* Ensure it fills space */
 }

@@ -6,7 +6,11 @@ export const menus = {};
 
 // Import the base API URL
 // import { API_BASE_URL } from '../variables.js'; // REMOVED - Now importing from main.js
-import { API_BASE_URL } from '/static/main.js'; // Updated import path
+import {
+    API_BASE_URL,
+    updateSiteTitleVisibility,
+    updateAccountButtonVisibility
+} from '/static/main.js'; // Updated import path
 
 // Import the fetch handler - needed for auto-fetching on render
 // import { handleFetchResources } from './instance-menu.js'; // Keep this relative path assumption in mind
@@ -15,16 +19,40 @@ import { API_BASE_URL } from '/static/main.js'; // Updated import path
 let actionHandlers = {};
 let menuContainerElement = null;
 let dynamicMenuTitleElement = null; // Renamed to avoid confusion with static site title
-let currentLoginState = null; // Store user login state
+let currentAuthState = null; // Store user authentication state
 let currentMenuId = null; // Store the ID of the currently rendered menu
 let tooltipElement = null; // Reference to the tooltip DOM element
 let tooltipTimeout = null; // Store the timeout ID for the tooltip
+let tooltipAnimationInterval = null; // Store the interval for the typewriter effect
+let lastMouseEvent = null; // Store the last mouse event for desktop positioning
+
+/**
+ * Allows other modules to update the last known mouse event, enabling shared tooltip logic.
+ * @param {MouseEvent|null} event - The latest mouse event, or null to clear it.
+ */
+export function updateLastMouseEvent(event) {
+    lastMouseEvent = event;
+}
+
+/**
+ * Updates the authentication state within the menu module.
+ * @param {object} newUserState - The new user state object.
+ */
+export function updateAuthState(newUserState) {
+    currentAuthState = newUserState;
+}
 
 /**
  * Checks for collision between the site title and header buttons.
  * Hides the site title if it overlaps with either the back or account buttons.
  */
 export function checkHeaderCollision() {
+    // If terminal view is active, the title should always be hidden.
+    if (document.body.classList.contains('terminal-view-active')) {
+        updateSiteTitleVisibility(false);
+        return;
+    }
+
     const siteTitle = document.getElementById('site-title');
     const accountButton = document.getElementById('account-button');
     const backButton = document.getElementById('back-button');
@@ -35,7 +63,7 @@ export function checkHeaderCollision() {
     }
 
     // Reset visibility to get accurate measurements
-    siteTitle.style.visibility = 'visible';
+    updateSiteTitleVisibility(true);
 
     const siteTitleRect = siteTitle.getBoundingClientRect();
     const accountButtonRect = accountButton.getBoundingClientRect();
@@ -51,12 +79,12 @@ export function checkHeaderCollision() {
     }
 
     // Check for overlap with back button
-    if (isBackButtonVisible && siteTitleRect.left < backButtonRect.right) {
+    if (isBackButtonVisible && siteTitleRect.left < backButtonRect.right + 10) { // Add 10px buffer
         collision = true;
     }
 
     // Set visibility based on collision detection
-    siteTitle.style.visibility = collision ? 'hidden' : 'visible';
+    updateSiteTitleVisibility(!collision);
 }
 
 // Function to generate HTML for a list of items
@@ -65,21 +93,51 @@ function generateListItemsHTML(items) {
         const itemType = item.type || 'button';
         const itemId = item.id ? ` id="${item.id}"` : '';
 
+        if (itemType === 'record-group') {
+            const subItemsHTML = item.items.map(subItem => {
+                const text = (subItem.text === undefined || subItem.text === null || subItem.text === '') ? '&nbsp;' : subItem.text;
+                // Note: sub-items in a group do not currently support actions or individual IDs.
+                return `<span class="menu-record-group-item">${text}</span>`;
+            }).join('');
+            return `<li${itemId} class="menu-record">${subItemsHTML}</li>`;
+        }
+
+        if (itemType === 'horizontal-container') {
+            const subItemsHTML = generateListItemsHTML(item.items || []);
+            return `<li${itemId} class="menu-item-container"><ul class="menu-horizontal-list">${subItemsHTML}</ul></li>`;
+        }
+
+        // Collect all data attributes from the item object, excluding reserved keys.
+        const reservedKeys = ['type', 'id', 'text', 'targetMenu', 'action'];
+        let customDataAttrs = '';
+        for (const key in item) {
+            if (item.hasOwnProperty(key) && !reservedKeys.includes(key)) {
+                // Convert camelCase to kebab-case for data attribute names
+                const kebabKey = key.replace(/([a-z0-9]|(?=[A-Z]))([A-Z])/g, '$1-$2').toLowerCase();
+                // Escape attribute value to be safe
+                const attrValue = String(item[key]).replace(/"/g, '&quot;');
+                customDataAttrs += ` data-${kebabKey}="${attrValue}"`;
+            }
+        }
+
         // These attributes determine if an item is interactive
         const targetAttr = item.targetMenu ? ` data-target-menu="${item.targetMenu}"` : '';
         const actionAttr = item.action ? ` data-action="${item.action}"` : '';
-        const resourceIdAttr = item.resourceId ? ` data-resource-id="${item.resourceId}"` : '';
-        const allDataAttrs = `${targetAttr}${actionAttr}${resourceIdAttr}`;
+        const tooltipDataAttr = item.tooltip ? ` data-tooltip-text="${String(item.tooltip).replace(/"/g, '&quot;')}"` : '';
+        const allDataAttrs = `${targetAttr}${actionAttr}${customDataAttrs}${tooltipDataAttr}`;
         
         // The class determines the visual style
         const isClickable = allDataAttrs.length > 0;
-        let className = itemType === 'button' ? 'menu-button' : 'menu-record';
-        if (isClickable && className === 'menu-record') {
-            className += ' menu-actionable'; // For hover/cursor styling
+        const classList = [item.type === 'button' ? 'menu-button' : 'menu-record'];
+        if (isClickable && classList[0] === 'menu-record') {
+            classList.push('menu-actionable'); // For hover/cursor styling
+        }
+        if (item.className) {
+            classList.push(item.className);
         }
 
         const text = (item.text === undefined || item.text === null || item.text === '') ? '&nbsp;' : item.text;
-        return `<li${itemId} class="${className}"${allDataAttrs}>${text}</li>`;
+        return `<li${itemId} class="${classList.join(' ')}"${allDataAttrs}>${text}</li>`;
     }).join('');
 }
 
@@ -205,7 +263,7 @@ export async function renderMenu(menuIdOrConfig) {
     // Update static header buttons based on current menu
     // Find buttons dynamically as they might be added/removed
     const backButton = document.getElementById('back-button');
-    const accountButton = document.getElementById('account-button');
+    const isAuthenticated = currentAuthState && !currentAuthState.guest;
 
     if (backButton) {
         if (menuConfig.backTarget) {
@@ -223,27 +281,13 @@ export async function renderMenu(menuIdOrConfig) {
         console.warn("Back button not found during renderMenu");
     }
 
-    if (accountButton) {
-        // Visibility: Hide only on the account menu itself.
-        if (menuId === 'account-menu') {
-            accountButton.style.display = 'none';
-            delete accountButton.dataset.targetMenu;
-        } else {
-            accountButton.style.display = 'inline-block';
-            // Text and Target: Based on login state.
-            if (currentLoginState && !currentLoginState.guest) {
-                // Logged in user
-                accountButton.textContent = 'account';
-                accountButton.dataset.targetMenu = 'account-menu';
-            } else {
-                // Guest or logged out
-                accountButton.textContent = 'authenticate';
-                delete accountButton.dataset.targetMenu;
-            }
-        }
+    // Centralized account button logic
+    if (menuId === 'account-menu') {
+        updateAccountButtonVisibility(false);
     } else {
-        console.warn("Account button not found during renderMenu");
+        updateAccountButtonVisibility(true, isAuthenticated);
     }
+
 
     // Check for header collision after updating button visibility and content
     checkHeaderCollision();
@@ -283,112 +327,163 @@ export async function renderMenu(menuIdOrConfig) {
 
 // --- Tooltip Handling --- START ---
 
-// Function to calculate and apply tooltip position
-function updateTooltipPosition(event) {
-    if (!tooltipElement || tooltipElement.style.display !== 'block') return;
-
-    const offsetX = 15; // Fixed horizontal offset to the right of the cursor
-
-    // Get tooltip dimensions *after* it's potentially filled with content
-    const tooltipHeight = tooltipElement.offsetHeight;
-    const tooltipWidth = tooltipElement.offsetWidth;
-
-    // Calculate desired position: centered vertically, offset to the right
-    let top = event.pageY - (tooltipHeight / 2);
-    let left = event.pageX + offsetX;
-
-    // Boundary Checks
-    const bodyRect = document.body.getBoundingClientRect();
-
-    // Adjust left if it goes off the right edge
-    if (left + tooltipWidth > bodyRect.right) {
-        left = event.pageX - tooltipWidth - offsetX; // Place it to the left instead
+function ensureTooltipElement() {
+    if (tooltipElement && document.body.contains(tooltipElement)) {
+        return;
     }
-    // Adjust left if it goes off the left edge (in case it was flipped)
-    if (left < bodyRect.left) {
-        left = bodyRect.left + 5; // Add a small padding from the edge
+    tooltipElement = document.getElementById('tooltip');
+    if (!tooltipElement) {
+        console.log("Creating tooltip element.");
+        tooltipElement = document.createElement('div');
+        tooltipElement.id = 'tooltip';
+        document.body.appendChild(tooltipElement);
     }
-
-    // Adjust top if it goes off the top edge
-    if (top < bodyRect.top) {
-        top = bodyRect.top + 5; // Add small padding
-    }
-    // Adjust top if it goes off the bottom edge
-    if (top + tooltipHeight > bodyRect.bottom) {
-        top = bodyRect.bottom - tooltipHeight - 5; // Add small padding
-    }
-
-    tooltipElement.style.left = `${left}px`;
-    tooltipElement.style.top = `${top}px`;
 }
 
-function showTooltip(event, infoText) {
-    if (!tooltipElement || !infoText) return;
+/**
+ * Displays and positions the tooltip. If infoText is provided, it shows the tooltip
+ * after a delay. If infoText is null, it just updates the position of the visible tooltip.
+ * @param {MouseEvent} event - The mouse event.
+ * @param {string|null} infoText - The text to display in the tooltip.
+ * @param {boolean} isImmediate - If true, bypasses the initial 500ms show delay.
+ */
+export function displayAndPositionTooltip(event, infoText = null, isImmediate = false) {
+    ensureTooltipElement();
+    if (!tooltipElement) return;
 
-    // Use a short delay before showing the tooltip
-    clearTimeout(tooltipTimeout); // Clear any existing timeout
-    tooltipTimeout = setTimeout(() => {
-        tooltipElement.textContent = infoText;
+    const positionTooltip = (e) => {
+        if (tooltipElement.style.display !== 'block') return;
+
+        const isTouchEvent = e.type.startsWith('touch');
+        const pos = isTouchEvent ? e.touches[0] : e;
+
+        if (!pos) return; // Can happen on touchend
+
+        const tooltipHeight = tooltipElement.offsetHeight;
+        const tooltipWidth = tooltipElement.offsetWidth;
+        const bodyRect = document.body.getBoundingClientRect();
+
+        let top, left;
+
+        if (isTouchEvent) {
+            // Mobile: Horizontally centered ABOVE the finger, with more offset
+            top = pos.pageY - tooltipHeight - 60; // Increased offset further
+            left = pos.pageX - (tooltipWidth / 2);
+
+            // Boundary checks
+            if (left < bodyRect.left + 5) left = bodyRect.left + 5;
+            if (left + tooltipWidth > bodyRect.right - 5) left = bodyRect.right - tooltipWidth - 5;
+            if (top < bodyRect.top + 5) top = pos.pageY + 25; // Flip below
+        } else {
+            // Desktop: To the right of the cursor
+            const offsetX = 15;
+            top = pos.pageY - (tooltipHeight / 2);
+            left = pos.pageX + offsetX;
+
+            // Boundary checks
+            if (left + tooltipWidth > bodyRect.right) left = pos.pageX - tooltipWidth - offsetX;
+            if (left < bodyRect.left) left = bodyRect.left + 5;
+            if (top < bodyRect.top) top = bodyRect.top + 5;
+            if (top + tooltipHeight > bodyRect.bottom) top = bodyRect.bottom - tooltipHeight - 5;
+        }
+
+        tooltipElement.style.left = `${left}px`;
+        tooltipElement.style.top = `${top}px`;
+    };
+
+    const showAndAnimate = () => {
+        const isTouchEvent = event.type.startsWith('touch');
+
+        // Prepare the tooltip element but keep it invisible.
+        tooltipElement.textContent = '';
         tooltipElement.style.display = 'block';
-        updateTooltipPosition(event);
-    }, 500); // 500ms delay
+        tooltipElement.style.visibility = 'hidden';
+
+        let i = 0;
+        clearInterval(tooltipAnimationInterval);
+        tooltipAnimationInterval = setInterval(() => {
+            if (i < infoText.length) {
+                tooltipElement.textContent += infoText.charAt(i);
+
+                // Position the tooltip based on its current content width.
+                const currentPositionEvent = isTouchEvent ? event : lastMouseEvent;
+                if (currentPositionEvent) {
+                    positionTooltip(currentPositionEvent);
+                }
+
+                // Make the tooltip visible only on the first frame, after it has content and is positioned.
+                if (i === 0) {
+                    tooltipElement.style.visibility = 'visible';
+                }
+
+                i++;
+            } else {
+                clearInterval(tooltipAnimationInterval);
+            }
+        }, 35);
+    };
+
+    if (infoText) { // This is a "show" request
+        clearTimeout(tooltipTimeout);
+        clearInterval(tooltipAnimationInterval);
+
+        const delay = isImmediate ? 0 : 500;
+        tooltipTimeout = setTimeout(showAndAnimate, delay);
+
+    } else { // This is a "reposition" request
+        positionTooltip(event);
+    }
 }
 
-function hideTooltip() {
-    clearTimeout(tooltipTimeout); // Clear timeout when mouse leaves
+export function hideTooltip() {
+    clearTimeout(tooltipTimeout); // Clear any pending show requests
+    clearInterval(tooltipAnimationInterval); // Stop any ongoing animation
     if (tooltipElement) {
         tooltipElement.style.display = 'none';
     }
 }
 
-async function handleMenuMouseOver(event) {
-    const target = event.target;
-    // Ensure we are hovering over a list item with a resource ID
-    if (target.tagName === 'LI' && target.dataset.resourceId) {
-        const resourceId = target.dataset.resourceId;
-        const menuConfig = menus[currentMenuId];
 
-        if (!menuConfig || !menuConfig.items) {
-             console.log("No menu config or items for tooltip.");
-             return;
-        }
+function findItemInfo(targetLi) {
+    if (!targetLi) return null;
 
-        // The item might be nested inside a dynamic configuration (e.g., under 'instances')
-        // We need a more robust way to find the item data.
-        let allItems = [];
-        if (Array.isArray(menuConfig.items)) {
-            allItems = menuConfig.items;
-            // If items have nested 'instances' arrays, flatten them
-            menuConfig.items.forEach(item => {
-                if (item.instances && Array.isArray(item.instances)) {
-                    allItems = allItems.concat(item.instances);
-                }
-            });
-        }
-        
-        const itemInfo = allItems.find(item => item.id === resourceId);
+    const itemId = targetLi.id || targetLi.dataset.resourceId;
+    const menuConfig = menus[currentMenuId];
 
-        if (itemInfo && itemInfo.tooltip) {
-            showTooltip(event, itemInfo.tooltip);
-        }
+    if (!menuConfig || !menuConfig.items || !itemId) {
+         return null;
     }
+
+    // Find the corresponding item in the menu configuration to get its tooltip text.
+    let allItems = [];
+    if (Array.isArray(menuConfig.items)) {
+        allItems = menuConfig.items;
+        menuConfig.items.forEach(item => {
+            if (item.instances && Array.isArray(item.instances)) {
+                allItems = allItems.concat(item.instances);
+            }
+        });
+    }
+    
+    return allItems.find(item => item.id === itemId);
 }
 
-function handleMenuMouseOut(event) {
-    // Hide the tooltip when the mouse leaves the list item or the menu container
-    hideTooltip();
-}
+// Obsolete mouse handlers removed. New logic is self-contained in initializeMenu.
 
 // --- Tooltip Handling --- END ---
 
 // --- Status Display Function --- START ---
 export function updateStatusDisplay(message, type = 'info') {
+    // Keep console output concise and avoid leaking IDs/URLs
+    const condensed = typeof message === 'string' ? message
+        .replace(/\b\w{8}-\w{4}-\w{4}-\w{4}-\w{12}\b/g, '[id]')
+        .replace(/wss?:\/\/[^\s)]+/g, '[url]')
+        : message;
+    console.log(`[Status][${type}]`, condensed);
+
+    // If the menu container isn't initialized (e.g., on the landing page),
+    // just log the message to the console and do not attempt to manipulate the DOM.
     if (!menuContainerElement) {
-        console.warn("Menu container not initialized. Status update only to console:", message);
-        // Fallback for critical messages if UI isn't ready
-        if (type === 'error' || type === 'warning') {
-            alert(`Status [${type.toUpperCase()}]: ${message}`);
-        }
         return;
     }
 
@@ -410,7 +505,7 @@ export function updateStatusDisplay(message, type = 'info') {
 
     statusElement.textContent = message;
     statusElement.className = ''; // Clear existing classes
-    statusElement.classList.add('menu-status-message'); // Base class
+    statusElement.classList.add('menu-status-message'); // Base class for styling
 
     // Add type-specific class for styling
     if (type === 'error') {
@@ -422,12 +517,6 @@ export function updateStatusDisplay(message, type = 'info') {
     } else { // 'info' or other types
         statusElement.classList.add('menu-status-info');
     }
-    // Keep console output concise and avoid leaking IDs/URLs
-    const condensed = typeof message === 'string' ? message
-        .replace(/\b\w{8}-\w{4}-\w{4}-\w{4}-\w{12}\b/g, '[id]')
-        .replace(/wss?:\/\/[^\s)]+/g, '[url]')
-        : message;
-    console.log(`[Status][${type}]`, condensed);
 }
 // Clear status helper
 export function clearStatusDisplay() {
@@ -439,22 +528,6 @@ export function clearStatusDisplay() {
     }
 }
 // --- Status Display Function --- END ---
-
-// Function to explicitly hide the main console container
-export function hideConsoleContainer() {
-    const consoleContainer = document.getElementById('console-container');
-    if (consoleContainer) {
-        consoleContainer.classList.add('hidden');
-    }
-}
-
-// Function to explicitly show the main console container
-export function showConsoleContainer() {
-    const consoleContainer = document.getElementById('console-container');
-    if (consoleContainer) {
-        consoleContainer.classList.remove('hidden');
-    }
-}
 
 // Cleanup function to call onLeave for current menu
 export function cleanupCurrentMenu() {
@@ -475,7 +548,7 @@ export function cleanupCurrentMenu() {
 export function refreshHeaderButtonsForCurrentMenu() {
     try {
         const backButton = document.getElementById('back-button');
-        const accountButton = document.getElementById('account-button');
+        const isAuthenticated = currentAuthState && !currentAuthState.guest;
         const menuConfig = menus[currentMenuId];
 
         if (backButton) {
@@ -491,20 +564,11 @@ export function refreshHeaderButtonsForCurrentMenu() {
             }
         }
 
-        if (accountButton) {
-            if (currentMenuId === 'account-menu') {
-                accountButton.style.display = 'none';
-                delete accountButton.dataset.targetMenu;
-            } else {
-                accountButton.style.display = 'inline-block';
-                if (currentLoginState && !currentLoginState.guest) {
-                    accountButton.textContent = 'account';
-                    accountButton.dataset.targetMenu = 'account-menu';
-                } else {
-                    accountButton.textContent = 'authenticate';
-                    delete accountButton.dataset.targetMenu;
-                }
-            }
+        // Centralized account button logic
+        if (currentMenuId === 'account-menu') {
+            updateAccountButtonVisibility(false);
+        } else {
+            updateAccountButtonVisibility(true, isAuthenticated);
         }
 
         // Re-run header collision check
@@ -522,19 +586,10 @@ export function initializeMenu(containerElement, handlers, userState) {
     // Search for the title element *within* the provided container
     dynamicMenuTitleElement = containerElement.querySelector('#menu-text'); 
     actionHandlers = handlers || {};      // Store the provided handlers
-    currentLoginState = userState;        // Store the user login state
+    currentAuthState = userState;         // Store the user authentication state
 
     // --- Tooltip Setup --- START ---
-    if (!tooltipElement) {
-        tooltipElement = document.getElementById('tooltip');
-        if (!tooltipElement) {
-            console.log("Creating tooltip element.");
-            tooltipElement = document.createElement('div');
-            tooltipElement.id = 'tooltip';
-            document.body.appendChild(tooltipElement);
-            // Styles are applied via CSS
-        }
-    }
+    ensureTooltipElement();
     // --- Tooltip Setup --- END ---
 
     // Initial Render - Start with the main menu (assuming it's registered)
@@ -587,18 +642,15 @@ export function initializeMenu(containerElement, handlers, userState) {
                 console.log(`Navigating to menu: ${targetMenu}`);
                 renderMenu(targetMenu);
             } else if (action) {
-                // Construct params object
-                const params = {
-                    resourceId,
-                    directive,
-                    returnPage,
-                    returnMenu,
-                    // Pass other necessary context if needed by handlers
-                    renderMenu,
-                    updateStatusDisplay, // Pass the function here
-                    menuContainer: menuContainerElement,
-                    menuTitle: dynamicMenuTitleElement
-                };
+                // Construct params object by collecting all data attributes from the element
+                const params = { ...li.dataset }; // Clone the dataset object
+                
+                // Pass other necessary context if needed by handlers
+                params.renderMenu = renderMenu;
+                params.updateStatusDisplay = updateStatusDisplay;
+                params.menuContainer = menuContainerElement;
+                params.menuTitle = dynamicMenuTitleElement;
+                
                 console.log(`Action triggered: ${action} with params:`, params);
                 // Call the appropriate handler from the provided map
                 if (actionHandlers[action]) {
@@ -623,13 +675,81 @@ export function initializeMenu(containerElement, handlers, userState) {
         });
 
         // --- Add Tooltip Listeners --- START ---
-        siteContainer.addEventListener('mouseover', handleMenuMouseOver);
-        siteContainer.addEventListener('mouseout', handleMenuMouseOut);
-        // Update position on mouse move
-        siteContainer.addEventListener('mousemove', (event) => {
-            // Simply call the update function if the tooltip is visible
-            updateTooltipPosition(event);
-        });
+        // Use a more reliable check for touch-primary devices.
+        const isTouchDevice = window.matchMedia("(pointer: coarse)").matches;
+
+        if (isTouchDevice) {
+            // --- Mobile: Press and Hold Logic ---
+            let pressHoldTimeout = null;
+            let tooltipIsVisible = false;
+
+            const onTouchMoveToReposition = (event) => {
+                if (tooltipIsVisible) {
+                    displayAndPositionTooltip(event); // Just reposition
+                }
+            };
+
+            const cancelPressAndHold = () => {
+                clearTimeout(pressHoldTimeout);
+                if (tooltipIsVisible) {
+                    hideTooltip();
+                    tooltipIsVisible = false;
+                }
+                siteContainer.removeEventListener('touchmove', onTouchMoveToReposition);
+            };
+
+            siteContainer.addEventListener('touchstart', (event) => {
+                if (tooltipIsVisible) return;
+                const targetLi = event.target.closest('li');
+                if (!targetLi) return;
+
+                const itemInfo = findItemInfo(targetLi);
+                if (itemInfo && itemInfo.tooltip) {
+                    pressHoldTimeout = setTimeout(() => {
+                        tooltipIsVisible = true;
+                        displayAndPositionTooltip(event, itemInfo.tooltip, true);
+                        siteContainer.addEventListener('touchmove', onTouchMoveToReposition, { passive: true });
+                    }, 500); // 500ms hold duration
+                }
+            }, { passive: true });
+
+            siteContainer.addEventListener('touchend', cancelPressAndHold);
+            siteContainer.addEventListener('touchcancel', cancelPressAndHold);
+
+        } else {
+            // --- Desktop: Mouseover Logic ---
+            let currentLi = null;
+
+            const onMouseMove = (event) => {
+                lastMouseEvent = event; // Continuously update the last mouse event
+                displayAndPositionTooltip(event);
+            };
+
+            const onMouseLeave = () => {
+                hideTooltip();
+                if (currentLi) {
+                    currentLi.removeEventListener('mousemove', onMouseMove);
+                    currentLi.removeEventListener('mouseleave', onMouseLeave);
+                }
+                currentLi = null;
+                lastMouseEvent = null; // Clear the event when the mouse leaves
+            };
+
+            siteContainer.addEventListener('mouseover', (event) => {
+                const targetLi = event.target.closest('li');
+                if (!targetLi || targetLi === currentLi) return;
+                if (currentLi) onMouseLeave();
+                currentLi = targetLi;
+
+                const itemInfo = findItemInfo(currentLi);
+                if (itemInfo && itemInfo.tooltip) {
+                    lastMouseEvent = event; // Store the initial mouse event
+                    displayAndPositionTooltip(event, itemInfo.tooltip);
+                    currentLi.addEventListener('mousemove', onMouseMove);
+                    currentLi.addEventListener('mouseleave', onMouseLeave);
+                }
+            });
+        }
         // --- Add Tooltip Listeners --- END ---
     }
 }

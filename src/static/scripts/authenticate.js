@@ -1,16 +1,104 @@
 // Import the API base URL
 import { fetchWithAuth, API_BASE_URL } from '/static/main.js';
-import { updateStatusDisplay } from '/static/pages/menu.js';
+import { updateStatusDisplay, clearStatusDisplay } from '/static/pages/menu.js';
 import { GCP_SCOPES, PEOPLE_PHONE_SCOPE } from '/static/scripts/scopes.js';
 
 // --- Configuration ---
 const GOOGLE_CLIENT_ID = "320840986458-539gugqm3d618e30s6qcottnu8goh5p1.apps.googleusercontent.com";
 
+// --- Helper for status updates ---
+function updateAuthStatus(container, message, type = 'info') {
+    const colorMap = {
+        error: 'red',
+        success: 'green',
+        info: 'inherit'
+    };
+    const color = colorMap[type] || 'inherit';
+
+    if (container) {
+        if (message) {
+            container.innerHTML = `<p style="color:${color};">${message.replace(/\n/g, '<br>')}</p>`;
+        } else {
+            container.innerHTML = '';
+        }
+    } else {
+        if (message) {
+            if (type === 'error') {
+                console.error(`[Auth Status] ${message}`);
+            } else {
+                console.log(`[Auth Status] ${message}`);
+            }
+        }
+    }
+}
+
 // --- Global variables ---
 let codeClient = null;
-let authSuccessCallback = null; // Store the success callback
 let google = null; // Will be initialized by the GSI script load
-let onSignInSuccessCallback = null;
+let defaultAuthRedirect = () => {
+    console.warn("Default auth redirect not configured. User will not be redirected after login.");
+};
+let onAuthSuccessCallback = null; // New callback
+
+/**
+ * Called from the main application entry point to configure the default
+ * action after a successful login when no other action is pending.
+ * @param {Function} redirectFn The function to call, e.g., loadConsoleView.
+ */
+export function configureAuthRedirect(redirectFn) {
+    if (typeof redirectFn === 'function') {
+        defaultAuthRedirect = redirectFn;
+    }
+}
+
+/**
+ * Called from the main application entry point to configure a callback
+ * that runs immediately on successful authentication, before any redirect.
+ * @param {Function} callbackFn The function to call.
+ */
+export function configureAuthSuccessCallback(callbackFn) {
+    if (typeof callbackFn === 'function') {
+        onAuthSuccessCallback = callbackFn;
+    }
+}
+
+/**
+ * Central handler for successful authentication.
+ * Checks for a pending action (e.g., from a checkout flow) and executes it.
+ * Otherwise, falls back to the default redirect.
+ * @param {object} userSession The user session object from the backend.
+ */
+async function handleAuthenticationSuccess(userSession) {
+    // Run the immediate success callback if it's configured
+    if (onAuthSuccessCallback) {
+        try {
+            onAuthSuccessCallback(userSession);
+        } catch (error) {
+            console.error("Error executing onAuthSuccessCallback:", error);
+        }
+    }
+
+    // This is now the single source of truth for post-auth actions.
+    console.log("Auth success. Checking for pending action:", window.pendingReauthAction);
+    const pendingAction = window.pendingReauthAction;
+    window.pendingReauthAction = null; // Clear immediately
+
+    if (pendingAction && typeof pendingAction.actionFn === 'function') {
+        console.log('Re-executing interrupted action after successful reauth');
+        try {
+            // Re-execute the stored action.
+            await pendingAction.actionFn(pendingAction.params);
+        } catch (error) {
+            console.error('Error re-executing pending action:', error);
+            // Fall back to default redirect if the pending action fails
+            defaultAuthRedirect();
+        }
+    } else {
+        // No pending action, perform the default redirect
+        defaultAuthRedirect();
+    }
+}
+
 
 // --- Core Logic ---
 
@@ -30,43 +118,41 @@ export function handleLoginSuccess(user) {
  * Calls the stored success callback on successful authentication.
  */
 async function handleAuthResponse(response, statusContainer) {
-    statusContainer.innerHTML = ''; // Clear previous status
-    if (response.ok) {
-        const data = await response.json();
-        console.log("Backend authentication successful:", data);
-
-        if (data.session && typeof data.session.email === 'string' && typeof data.session.token === 'string') {
-            // Store the data.session object directly
-            sessionStorage.setItem('currentUser', JSON.stringify(data.session));
-            console.log("Stored user session in sessionStorage.currentUser:", data.session);
-
-            if (typeof authSuccessCallback === 'function') {
-                authSuccessCallback(data.session); // Pass the data.session object to the callback
-            } else {
-                console.error("Authentication successful, but no success callback was provided.");
-                statusContainer.innerHTML = '<p style="color:green;">Authentication successful.</p>';
-            }
-        } else {
-            console.error("Backend response is missing 'session' object or 'session.email'/'session.token'.", data);
-            statusContainer.innerHTML = '<p style="color:red;">Authentication data incomplete from server.</p>';
-            return; // Exit if data is incomplete
-        }
-    } else {
-        // Handle backend authentication errors
+    updateAuthStatus(statusContainer, ''); // Clear previous status
+    
+    if (!response.ok) {
+        // Handle all non-successful responses
         let errorMsg = `Backend authentication failed: ${response.status}`;
         try {
             const errorData = await response.json();
             const details = errorData.details || '';
             errorMsg += ` - ${errorData.error || 'Unknown error'}` + (details ? `\nDetails: ${details}` : '');
-            console.error('[Auth][Frontend] Backend error payload:', errorData);
         } catch (e) {
-            try {
-                const text = await response.text();
-                errorMsg += ` - ${text}`;
-            } catch(_) { /* Ignore */ }
+            // Fallback if the error response isn't valid JSON
+            const text = await response.text().catch(() => '');
+            if (text) errorMsg += ` - ${text}`;
         }
         console.error(errorMsg);
-        statusContainer.innerHTML = `<p style="color:red;">${errorMsg.replace(/\n/g, '<br>')}</p>`;
+        updateAuthStatus(statusContainer, errorMsg, 'error');
+        return;
+    }
+
+    // Handle successful response
+    try {
+        const data = await response.json();
+        const { session } = data;
+
+        if (session && typeof session.email === 'string' && typeof session.token === 'string') {
+            console.log("Backend authentication successful:", data);
+            sessionStorage.setItem('currentUser', JSON.stringify(session));
+            console.log("Stored user session in sessionStorage.currentUser:", session);
+            await handleAuthenticationSuccess(session);
+        } else {
+            throw new Error("Authentication data incomplete from server.");
+        }
+    } catch (error) {
+        console.error("Error processing successful authentication response:", error);
+        updateAuthStatus(statusContainer, `Error: ${error.message}`, 'error');
     }
 }
 
@@ -74,19 +160,19 @@ async function handleAuthResponse(response, statusContainer) {
  * Initializes the Google Sign-In code client.
  * Needs the status container element and a success callback function.
  */
-export function initializeGoogleSignIn(statusContainer, successCallback) {
-    // Store the success callback for later use
-    authSuccessCallback = successCallback;
+export function initializeGoogleSignIn(statusContainer) {
+    // This function no longer accepts a `successCallback`.
+    // It always uses the internal `handleAuthenticationSuccess`.
 
      if (!window.google || !window.google.accounts || !window.google.accounts.oauth2) {
         console.error("Google Identity Services library not loaded.");
-        statusContainer.innerHTML = '<p style="color:red;">Error: Google Sign-In library failed to load.</p>';
+        updateAuthStatus(statusContainer, 'Error: Google Sign-In library failed to load.', 'error');
         return;
     }
 
     if (!GOOGLE_CLIENT_ID || GOOGLE_CLIENT_ID.startsWith('YOUR_GOOGLE_CLIENT_ID')) {
         console.error("Google Client ID is not configured.");
-        statusContainer.innerHTML = '<p style="color:red;">Error: Google Sign-In is not configured (Missing Client ID).</p>';
+        updateAuthStatus(statusContainer, 'Error: Google Sign-In is not configured (Missing Client ID).', 'error');
         return;
     }
 
@@ -105,10 +191,10 @@ export function initializeGoogleSignIn(statusContainer, successCallback) {
             ux_mode: 'popup',
             redirect_uri: dynamicRedirectUri,
             callback: async (response) => {
-                statusContainer.innerHTML = ''; // Clear status on new attempt
+                updateAuthStatus(statusContainer, ''); // Clear status on new attempt
                 console.log("Received authorization code from Google:", response.code ? response.code.substring(0, 10) + '...' : 'Error/Cancelled');
                 if (response.code) {
-                    statusContainer.innerHTML = '<p>Authenticating with server...</p>'; // Indicate progress
+                    updateAuthStatus(statusContainer, 'Authenticating with server...', 'info'); // Indicate progress
                     try {
                         console.log('[Auth][Frontend] Posting auth code to backend with Origin:', window.location.origin);
                         const backendResponse = await fetch(`${API_BASE_URL}/authenticate`, {
@@ -119,23 +205,35 @@ export function initializeGoogleSignIn(statusContainer, successCallback) {
                         await handleAuthResponse(backendResponse, statusContainer);
                     } catch (error) {
                         console.error('Network or other error sending code to backend:', error);
-                        statusContainer.innerHTML = '<p style="color:red;">Network error communicating with server. Please try again.</p>';
+                        updateAuthStatus(statusContainer, 'Network error communicating with server. Please try again.', 'error');
                     }
                 } else {
-                    console.error("Error receiving authorization code from Google:", response);
-                    const googleError = response.error ? ` (${response.error})` : '';
-                    statusContainer.innerHTML = `<p style="color:red;">Google Sign-In failed or was cancelled${googleError}.</p>`;
+                    // Handle user closing the popup gracefully
+                    if (response.error === 'popup_closed' || response.error === 'popup_closed_by_user') {
+                        console.log('Google Sign-In popup closed by user.');
+                        updateAuthStatus(statusContainer, 'Sign-in cancelled.', 'info');
+                    } else {
+                        console.error("Error receiving authorization code from Google:", response);
+                        const googleError = response.error ? ` (${response.error})` : '';
+                        updateAuthStatus(statusContainer, `Google Sign-In failed or was cancelled${googleError}.`, 'error');
+                    }
                 }
             },
             error_callback: (error) => {
+                // Don't show an error if the user closed the popup
+                if (error.type === 'popup_closed') {
+                    console.log('Google Sign-In popup closed by user.');
+                    updateAuthStatus(statusContainer, 'Sign-in cancelled.', 'info');
+                    return;
+                }
                 console.error('Google Code Client Error:', error);
-                statusContainer.innerHTML = `<p style="color:red;">Google Sign-In Error: ${error.type || 'Unknown error'}. Check console.</p>`;
+                updateAuthStatus(statusContainer, `Google Sign-In Error: ${error.type || 'Unknown error'}. Check console.`, 'error');
             }
         });
         console.log('Google Code Client Initialized.');
     } catch(error) {
          console.error('Error during Google Code Client Initialization:', error);
-         statusContainer.innerHTML = `<p style="color:red;">Critical Error initializing Google Sign-In. Check console.</p>`;
+         updateAuthStatus(statusContainer, 'Critical Error initializing Google Sign-In. Check console.', 'error');
          codeClient = null; // Ensure client is null if init fails
     }
 }
@@ -146,13 +244,13 @@ export function initializeGoogleSignIn(statusContainer, successCallback) {
  */
 export function triggerGoogleSignIn(statusContainer) {
     if (codeClient) {
-        statusContainer.innerHTML = ''; // Clear previous status/error messages
+        updateAuthStatus(statusContainer, ''); // Clear previous status/error messages
         console.log('Requesting authorization code...');
         console.log('[DEBUG] Attempting to call codeClient.requestCode()');
         codeClient.requestCode();
     } else {
         console.error("Google Code Client not initialized or initialization failed.");
-        statusContainer.innerHTML = '<p style="color:red;">Error: Sign-in client failed to initialize. Please refresh.</p>';
+        updateAuthStatus(statusContainer, 'Error: Sign-in client failed to initialize. Please refresh.', 'error');
     }
 }
 
@@ -179,19 +277,21 @@ export function getUser() {
 /**
  * A higher-order function that wraps an action with authentication and subscription checks.
  * @param {Function} actionFn The async function to execute if all checks pass. It will receive the `params` object.
- * @param {string} actionName A user-friendly name for the action, used in status messages (e.g., "view instances").
+ * @param {string} actionName A user-friendly name for the action, used in status messages (e.g., "view sites").
  * @returns {Function} An async function that takes a `params` object and executes the guarded action.
  */
-export function requireAuthAndSubscription(actionFn, actionName) {
+export function requireAuthAndSubscription(actionFn, actionName, options = {}) {
+    const { skipSubscriptionCheck } = options || {};
+
     const guarded = async function(params) {
         // Destructure all required functions and elements from params
-        const { menuContainer, renderMenu, updateStatusDisplay } = params;
+        let { menuContainer, renderMenu, updateStatusDisplay, skipSubscription } = params || {};
 
         if (!updateStatusDisplay) {
-            console.error("PANIC: updateStatusDisplay was not provided to requireAuthAndSubscription. Cannot proceed.");
-            // Show a native alert as a last resort because the UI is unavailable.
-            alert(`A critical error occurred. The status display function is missing.`);
-            return;
+            // Fallback for when no UI status updater is provided (e.g., on the landing page).
+            updateStatusDisplay = (message, type = 'info') => {
+                console[type === 'error' ? 'error' : 'log'](`[Auth Guard] ${message}`);
+            };
         }
 
         const user = getUser();
@@ -204,76 +304,95 @@ export function requireAuthAndSubscription(actionFn, actionName) {
                 // Re-run the guarded wrapper after auth, not the inner actionFn
                 window.pendingReauthAction = { actionFn: guarded, params };
             }
-            const onLoginSuccess = () => {
-                updateStatusDisplay('', 'info');
-                // After login, re-execute the guarded flow with original params
-                try { guarded(params); } catch(_) {}
-            };
-            const statusContainer = menuContainer.querySelector('#menu-status-message') || menuContainer;
-            initializeGoogleSignIn(statusContainer, onLoginSuccess);
+            
+            // The success callback is now handled internally by the new central handler.
+            // We no longer need to import anything from main.js or define a custom callback here.
+
+            // Robustly find a status container.
+            // If on landing, use null to log to console. Otherwise, find a UI element.
+            const isLandingPage = !!document.getElementById('landing-view-container');
+            let statusContainer;
+            if (isLandingPage) {
+                statusContainer = null;
+            } else if (menuContainer) {
+                statusContainer = menuContainer.querySelector('#menu-status-message') || menuContainer;
+            } else {
+                statusContainer = document.getElementById('prompt-container') || document.body;
+            }
+
+            initializeGoogleSignIn(statusContainer);
             triggerGoogleSignIn(statusContainer);
             return;
         }
 
-        // 2. Subscription Check
-        try {
-            updateStatusDisplay("Checking subscription status…", "info");
-            const response = await fetchWithAuth(`${API_BASE_URL}/subscription-status`);
-            if (!response.ok) {
-                const errorData = await response.json().catch(() => ({})); // try to get error details
-                throw new Error(`failed to fetch subscription status: ${errorData.error || response.statusText}`);
-            }
-            const subscriptionData = await response.json();
-
-            if (subscriptionData.status !== 'active') {
-                updateStatusDisplay(`active subscription required to ${actionName}.`, 'info');
-                
-                // Dynamically import and use Stripe to redirect to checkout
-                const { initializeStripe, handleSubscribe } = await import('/static/menus/subscription.js');
-                await initializeStripe();
-                await handleSubscribe(); // This navigates away to Stripe
-                return; // Stop execution
-            }
-
-            // 3. ToS acceptance check before executing the action
+        // 2. Subscription Check (conditional)
+        if (!skipSubscription && !skipSubscriptionCheck) {
             try {
-                const statusContainer = (menuContainer && (menuContainer.querySelector('#menu-status-message') || menuContainer)) || null;
-                const { ensureGcpTosAccepted } = await import('/static/scripts/popup.js');
-                const accepted = await ensureGcpTosAccepted({ statusEl: statusContainer });
-                if (!accepted) {
-                    updateStatusDisplay('Please accept Google Cloud Terms to continue.', 'warning');
+                updateStatusDisplay("Checking subscription status…", "info");
+                const response = await fetchWithAuth(`${API_BASE_URL}/subscription-status`);
+                if (!response.ok) {
+                    const errorData = await response.json().catch(() => ({})); // try to get error details
+                    throw new Error(`failed to fetch subscription status: ${errorData.error || response.statusText}`);
+                }
+                const subscriptionData = await response.json();
+                if (subscriptionData.status !== 'active') {
+                    updateStatusDisplay(`active subscription required to ${actionName}.`, 'info');
+                    
+                    const { initializeStripe, handleSubscribe } = await import('/static/menus/subscription.js');
+                    const { updateBackButtonHandler, unregisterBackButtonHandler } = await import('/static/main.js');
+                    const { cancelCurrentPrompt } = await import('/static/pages/prompt.js');
+                    const backHandler = () => {
+                        cancelCurrentPrompt();
+                    };
+                    updateBackButtonHandler(backHandler);
+                    try {
+                        await initializeStripe();
+                        await handleSubscribe(); // This shows the embedded checkout prompt
+                    } finally {
+                        unregisterBackButtonHandler();
+                    }
+                    
+                    return; // Stop execution
+                }
+            } catch (error) {
+                console.error(`Error during subscription check for ${actionName}:`, error);
+                if (error && error.message === 'ReauthInitiated') {
+                    // Store the original action for re-execution after successful reauth (only if not already set)
+                    if (typeof window !== 'undefined' && !window.pendingReauthAction) {
+                        window.pendingReauthAction = { actionFn: guarded, params };
+                    }
+                    // Suppress user-facing error and wait for re-execution.
                     return;
                 }
-            } catch (e) {
-                console.error('ToS acceptance check failed:', e);
-                updateStatusDisplay('Could not verify Google Cloud Terms acceptance.', 'error');
-                return;
+                updateStatusDisplay(`unable to verify subscription: ${error.message}`, "error");
+                // Optionally, render an error menu
+                if (renderMenu) {
+                    renderMenu({
+                        id: 'auth-error-menu',
+                        text: 'error',
+                        items: [{ text: `could not verify subscription.`, type: 'record' }, {text: 'please try again later.', type: 'record'}],
+                        backTarget: 'dashboard-menu'
+                    });
+                }
+                return; // Stop execution on subscription check failure
             }
+        }
 
-            // 4. All checks passed, execute the original action
-            updateStatusDisplay('', 'info'); // Clear status message
+        // 4. All checks passed, execute the original action
+        try {
+            clearStatusDisplay(); // Clear status message
             await actionFn(params);
-
         } catch (error) {
-            console.error(`Error during subscription check for ${actionName}:`, error);
+            // This final catch handles cases where the actionFn itself triggers a 401 error.
             if (error && error.message === 'ReauthInitiated') {
-                // Store the original action for re-execution after successful reauth (only if not already set)
                 if (typeof window !== 'undefined' && !window.pendingReauthAction) {
                     window.pendingReauthAction = { actionFn: guarded, params };
                 }
-                // Suppress user-facing error and wait for re-execution.
+                // Suppress further errors as re-auth is in progress.
                 return;
             }
-            updateStatusDisplay(`unable to verify subscription: ${error.message}`, "error");
-            // Optionally, render an error menu
-            if (renderMenu) {
-                renderMenu({
-                    id: 'auth-error-menu',
-                    text: 'error',
-                    items: [{ text: `could not verify subscription.`, type: 'record' }, {text: 'please try again later.', type: 'record'}],
-                    backTarget: 'dashboard-menu'
-                });
-            }
+            // Re-throw other errors so they can be handled by the caller.
+            throw error;
         }
     };
     return guarded;

@@ -1,11 +1,18 @@
 // Import the central menu registry and API base URL
 import { menus, renderMenu, updateStatusDisplay } from '/static/pages/menu.js';
-import { API_BASE_URL, fetchWithAuth } from '/static/main.js';
+import { API_BASE_URL, fetchWithAuth, updateBackButtonHandler, unregisterBackButtonHandler } from '/static/main.js';
 import { requireAuthAndSubscription } from '/static/scripts/authenticate.js';
-import { prompt } from '/static/pages/prompt.js';
+import { prompt, cancelCurrentPrompt } from '/static/pages/prompt.js';
+import { fetchDomains } from '/static/scripts/utilities.js';
 
 async function handleRegisterNewDomain(params) {
     const { resourceId: projectId, renderMenu } = params;
+
+    const backHandler = () => {
+        cancelCurrentPrompt();
+    };
+    updateBackButtonHandler(backHandler);
+
     try {
         if (!projectId) throw new Error("No project ID for domain registration.");
         
@@ -13,12 +20,14 @@ async function handleRegisterNewDomain(params) {
         
         updateStatusDisplay(`successfully registered ${newDomain}!`, 'success');
         listDomains(params); // Re-render the menu on success
-        } catch (error) {
+    } catch (error) {
         console.log("Domain registration cancelled or failed.", error.message);
         // Don't show a status message on cancellation, just go back.
         if (renderMenu) {
             renderMenu('resource-menu');
         }
+    } finally {
+        unregisterBackButtonHandler();
     }
 }
 
@@ -36,12 +45,6 @@ async function promptForNewDomain(context) {
         throw new Error("Domain registration was cancelled.");
     }
 
-async function fetchUserDomains() {
-    const response = await fetchWithAuth(`${API_BASE_URL}/domains`);
-    if (!response.ok) throw new Error(`Failed to fetch domains: ${response.statusText}`);
-    return response.json();
-}
-
 async function _listDomainsLogic(params) {
     const { renderMenu } = params;
     renderMenu({
@@ -52,7 +55,19 @@ async function _listDomainsLogic(params) {
     });
 
     try {
-        const data = await fetchUserDomains();
+        const data = await fetchDomains();
+        
+        // Handle the "no deployments" message from the backend
+        if (data.message) {
+            renderMenu({
+                id: 'domain-menu',
+                text: 'domains:',
+                items: [{ text: data.message, type: 'record' }],
+                backTarget: 'resource-menu'
+            });
+            return;
+        }
+
         const domainItems = (data.domains || []).map(d => ({
             text: d.domainName,
             type: 'button' // Changed back to 'button'

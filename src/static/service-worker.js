@@ -19,8 +19,10 @@ const urlsToCache = [
   '/static/menus/domain.js',
   '/static/menus/billing.js',
   '/static/menus/firewall.js',
-  '/static/menus/instance.js',
+  '/static/menus/site.js',
   '/static/menus/backup.js',
+  '/static/menus/subscription.js',
+  '/static/menus/machine.js',
   '/static/icon.png',
   '/static/manifest.json',
   '/static/service-worker.js'

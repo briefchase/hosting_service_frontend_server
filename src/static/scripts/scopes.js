@@ -1,7 +1,9 @@
 // Centralized Google OAuth scopes for frontend usage
 export const GCP_SCOPES = [
     // Minimum effective scope that covers required Google Cloud APIs
-    "https://www.googleapis.com/auth/cloud-platform"
+    "https://www.googleapis.com/auth/cloud-platform",
+    // Allow creating files in Google Drive for backups
+    "https://www.googleapis.com/auth/drive.file"
 ].join(' ');
 
 // Optional granular scopes (kept here as references). Only use these if you

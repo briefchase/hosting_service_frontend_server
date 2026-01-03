@@ -1,61 +1,40 @@
-import { API_BASE_URL } from '/static/main.js';
+/**
+ * Opens a new popup window and writes a redirecting document.
+ * This approach helps to avoid some popup blocker issues when `window.open`
+ * is called with a URL directly from a non-user-initiated event.
+ *
+ * @param {string} url - The destination URL to redirect to.
+ * @param {string} windowName - The name of the window.
+ * @param {string} features - The string of window features.
+ * @returns {Window | null} The new window object or null if it was blocked.
+ */
+export function openPopup(url, windowName, features) {
+    const popup = window.open('', windowName, features);
 
-// Opens a popup to Google's Cloud Console welcome page for ToS acceptance,
-// then polls the backend /tos-status to detect acceptance and auto-close.
-export async function ensureGcpTosAccepted({ statusEl, pollIntervalMs = 2500, maxWaitMs = 180000 } = {}) {
-    try {
-        // First, quick server-side check to avoid opening popup if already accepted
-        const pre = await fetch(`${API_BASE_URL}/tos-status`, { headers: buildAuthHeaders() });
-        const preData = await pre.json().catch(() => ({}));
-        if (pre.ok && preData && preData.accepted) return true;
-
-        const url = 'https://console.cloud.google.com/welcome';
-        const popup = window.open(url, 'gcp_tos_popup', 'width=480,height=640');
-        if (!popup) {
-            if (statusEl) statusEl.textContent = 'Please allow popups to accept Google Cloud Terms.';
-            return false;
-        }
-        if (statusEl) statusEl.textContent = 'Please accept Google Cloud Terms in the popup…';
-
-        const start = Date.now();
-        while (Date.now() - start < maxWaitMs) {
-            // If user closes the popup early, continue polling; they may have accepted in an existing tab
-            await sleep(pollIntervalMs);
-            const resp = await fetch(`${API_BASE_URL}/tos-status`, { headers: buildAuthHeaders() });
-            const data = await resp.json().catch(() => ({}));
-            if (resp.ok && data && data.accepted) {
-                try { popup.close(); } catch(_) {}
-                if (statusEl) statusEl.textContent = '';
-                return true;
-            }
-            // Handle insufficient scopes early to avoid confusing UX
-            if (data && data.reason === 'insufficient_scopes') {
-                if (statusEl) statusEl.textContent = 'Your Google permissions are insufficient. Please re-authenticate.';
-                try { popup.close(); } catch(_) {}
-                return false;
-            }
-        }
-        try { popup.close(); } catch(_) {}
-        if (statusEl) statusEl.textContent = 'Timed out waiting for Terms acceptance.';
-        return false;
-    } catch (e) {
-        if (statusEl) statusEl.textContent = 'Could not verify Terms acceptance. Please try again.';
-        return false;
+    if (!popup) {
+        return null;
     }
-}
 
-function buildAuthHeaders() {
     try {
-        const s = sessionStorage.getItem('currentUser');
-        if (!s) return {};
-        const u = JSON.parse(s);
-        if (u && u.token) return { Authorization: `Bearer ${u.token}` };
-        return {};
-    } catch (_) { return {}; }
-}
+        const doc = popup.document;
+        const safeDest = JSON.stringify(url);
+        doc.open();
+        doc.write(
+            '<!DOCTYPE html>' +
+            '<html><head><meta charset="utf-8">' +
+            '<meta name="viewport" content="width=device-width, initial-scale=1">' +
+            '<title>Redirecting…</title>' +
+            '<style>html,body{background:#fff;color:#000;font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif;font-size:14px;margin:0;padding:16px}</style>' +
+            '<script>(function(){var d=' + safeDest + ';setTimeout(function(){try{location.replace(d);}catch(e){location.href=d;}},50);})();<\/script>' +
+            '</head><body>Redirecting...</body></html>'
+        );
+        doc.close();
+        try { popup.focus(); } catch(_) {}
+    } catch(_) {
+        // Errors can happen due to cross-origin restrictions, but the redirect should still work.
+    }
 
-function sleep(ms) {
-    return new Promise(res => setTimeout(res, ms));
+    return popup;
 }
 
 

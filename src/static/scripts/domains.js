@@ -14,7 +14,11 @@ export async function purchaseDomain({ domainName, price, projectId, privacy, to
             project_id: projectId,
             privacy: privacy
         };
-        if (phoneNumber) payload.phone_number = phoneNumber;
+        // Expects phoneNumber to be an object: { countryCode, number }
+        if (phoneNumber && phoneNumber.countryCode && phoneNumber.number) {
+            payload.phone_country_code = phoneNumber.countryCode;
+            payload.phone_number = phoneNumber.number;
+        }
 
         const response = await fetchWithAuth(`${API_BASE_URL}/domains`, {
             method: 'POST',

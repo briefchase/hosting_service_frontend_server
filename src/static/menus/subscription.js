@@ -12,7 +12,7 @@ let isOnSubscriptionPage = false;
 // Initialize Stripe
 export async function initializeStripe() {
     try {
-        const response = await fetch(`${API_BASE_URL}/config`);
+        const response = await fetch(`${API_BASE_URL}/stripe-config`);
         if (!response.ok) {
             throw new Error('Failed to fetch Stripe configuration from server.');
         }
@@ -58,6 +58,7 @@ export async function handleSubscribe() {
         // Prefer embedded checkout; if client_secret missing, the prompt will request it
         const clientSecret = session && session.client_secret;
         const { prompt } = await import('/static/pages/prompt.js');
+
         await prompt({
             id: 'embedded_checkout_prompt',
             text: 'Complete your subscription below:',

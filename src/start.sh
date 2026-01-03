@@ -323,7 +323,7 @@ configure_ssl() {
     # Run certbot for the validated domains
     certbot --apache --expand $domain_args --email "$ssl_email" --agree-tos --non-interactive --redirect || {
       log "Warning: Certbot failed for validated domains. Check logs for details."
-      return 1 # Keep this to indicate a real problem
+      return 0 # Allow deployment to continue even if certbot fails
     }
 
     # After successful certificate installation, enable HSTS for HTTPS responses

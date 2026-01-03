@@ -82,24 +82,40 @@ while true; do
            ;;
         2) # Update Remote (Deploy Apache to GCP)
            deployment_type="remote"
-           echo "Starting remote Apache deployment to GCP..."
            
-           # Configure remote deployment (this will prompt for SSL email, domain, etc.)
-           configure_deployment "$_GO_SCRIPT_DIR" "$deployment_type" || operation_failed=true
+           read -p "skip config? (y/n) [default: y]: " skip_config_input
+           skip_config="${skip_config_input:-y}"
+
+           if [[ "$skip_config" =~ ^[Yy]$ ]]; then
+                echo "Skipping interactive configuration and using saved values."
+                load_config # This populates the CFG_ variables
+                # Check for required values
+                if [[ -z "$CFG_EXTERNAL_URL" ]]; then
+                    echo "Error: EXTERNAL_URL is required for remote deployment but is not configured." >&2
+                    echo "Please run the deployment again without skipping config to set the URL." >&2
+                    operation_failed=true
+                fi
+           else
+               echo "Starting remote Apache deployment to GCP..."
+               # Configure remote deployment (this will prompt for SSL email, domain, etc.)
+               configure_deployment "$_GO_SCRIPT_DIR" "$deployment_type" || operation_failed=true
+
+               if [ "$operation_failed" = false ]; then
+                   # Simple deployment for remote - just need deployment name
+                   deployment_name="${CFG_DEPLOYMENT_NAME:-apache-remote}"
+                   read -p "Enter deployment name [default: $deployment_name]: " input_name
+                   deployment_name="${input_name:-$deployment_name}"
+                   CFG_DEPLOYMENT_NAME="$deployment_name"  # Save for next time
+                   save_config  # Save the updated deployment name
+               fi
+           fi
            
            if [ "$operation_failed" = false ]; then
-               # Simple deployment for remote - just need deployment name
-               deployment_name="${CFG_DEPLOYMENT_NAME:-apache-remote}"
-               read -p "Enter deployment name [default: $deployment_name]: " input_name
-               deployment_name="${input_name:-$deployment_name}"
-               CFG_DEPLOYMENT_NAME="$deployment_name"  # Save for next time
-               save_config  # Save the updated deployment name
-               
                # Use the tf_confirm from configuration
                tf_confirm="$CFG_CONFIRM_APPLY"
                
                # Call simplified deploy function - 3 arguments: type, name, tf_confirm
-               deploy "$deployment_type" "$deployment_name" "$tf_confirm" || operation_failed=true
+               deploy "$deployment_type" "$CFG_DEPLOYMENT_NAME" "$tf_confirm" || operation_failed=true
            fi
            ;;
         3) # Nuke Menu
