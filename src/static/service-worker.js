@@ -39,6 +39,12 @@ self.addEventListener('install', event => {
 });
 
 self.addEventListener('fetch', event => {
+  // Only handle requests for same-origin resources.
+  // This prevents the service worker from interfering with API calls to other domains.
+  if (new URL(event.request.url).origin !== self.origin) {
+    return;
+  }
+
   event.respondWith(
     caches.match(event.request)
       .then(response => {

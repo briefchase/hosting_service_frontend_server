@@ -89,7 +89,6 @@ const _listDeploymentsForBackup = async ({ renderMenu, updateStatusDisplay }) =>
         }
 
         lastFetchedDeployments = deployments;
-        updateStatusDisplay('', 'info');
 
         if (deployments.length === 0) {
             const noDeploymentsMenu = {
@@ -169,8 +168,6 @@ const _showRestoreMenu = async ({ renderMenu, updateStatusDisplay }) => {
         if (!response.ok) {
             throw new Error(result.error || 'Failed to fetch backups.');
         }
-        
-        updateStatusDisplay('', 'info');
 
         if (!result.backups || result.backups.length === 0) {
             renderMenu({
@@ -484,7 +481,6 @@ const _showScheduleMenu = async ({ renderMenu, updateStatusDisplay }) => {
         }
 
         lastFetchedDeployments = deployments;
-        updateStatusDisplay('', 'info');
 
         if (deployments.length === 0) {
             const noDeploymentsMenu = {
@@ -628,9 +624,9 @@ export const promptBackupSchedule = requireAuthAndSubscription(
 const backupMenuConfig = {
     text: 'backups:',
     items: [
-        { id: 'create-backup-option', text: 'create', action: 'listDeploymentsForBackup', type: 'button' },
-        { id: 'restore-backup-option', text: 'restore', action: 'showRestoreMenu', type: 'button' },
-        { id: 'schedule-backup-option', text: 'schedule', action: 'showScheduleMenu', type: 'button' }
+        { id: 'create-backup-option', text: 'create', action: 'listDeploymentsForBackup', type: 'button', showLoading: true },
+        { id: 'restore-backup-option', text: 'restore', action: 'showRestoreMenu', type: 'button', showLoading: true },
+        { id: 'schedule-backup-option', text: 'schedule', action: 'showScheduleMenu', type: 'button', showLoading: true }
     ],
     backTarget: 'resource-menu'
 };

@@ -4,7 +4,8 @@ import {
     updateBackButtonHandler,
     unregisterBackButtonHandler,
     setSiteMode,
-    getSiteMode
+    getSiteMode,
+    dayOfYear
 } from '/static/main.js';
 import {
     displayAndPositionTooltip,
@@ -24,6 +25,9 @@ const GOOGLE_CLIENT_ID = "320840986458-539gugqm3d618e30s6qcottnu8goh5p1.apps.goo
 // Scopes centralized in /static/scripts/scopes.js; this page doesn't directly use them.
 
 // --- State Variables ---
+let taglineAnimationInterval = null;
+const playlistIds = ['7LDlK4VLv2RNxaQ7Z4D6qI', '5K2aMLIRcHx4TKG2F1fzfR'];
+let dailyPlaylistId = null;
 let spotifyEmbedEl = null;
 let spotifyEmbedWrapperEl = null;
 
@@ -45,7 +49,8 @@ let mockupEl = null;
 
 // --- Mode Toggle ---
 let modeToggleContainerEl = null;
-let modeToggleEl = null;
+let catModeIconEl = null;
+let seriousModeIconEl = null;
 let modeToggleHandlersAttached = false;
 
 
@@ -82,6 +87,7 @@ function ensureSpotifyEmbedCreated() {
     }
 
     if (spotifyEmbedEl) {
+        spotifyEmbedEl.src = `https://open.spotify.com/embed/playlist/${dailyPlaylistId}?utm_source=generator`;
         isSpotifyEmbedReady = true;
         tryInitializeSpotifyController();
     } else {
@@ -103,7 +109,7 @@ function initializeSpotifyController() {
 
     try {
         const options = {
-            uri: 'spotify:playlist:7LDlK4VLv2RNxaQ7Z4D6qI'
+            uri: `spotify:playlist:${dailyPlaylistId}`
         };
 
         spotifyIframeApi.createController(spotifyEmbedEl, options, (EmbedController) => {
@@ -223,6 +229,45 @@ function showSpotifyEmbed() {
 function hideSpotifyEmbed() {
     if (!spotifyEmbedWrapperEl) return;
     spotifyEmbedWrapperEl.style.display = 'none';
+}
+
+function positionTagline() {
+    const taglineEl = document.getElementById('hosting-tagline');
+    if (!taglineEl) return;
+
+    const landingContainer = document.getElementById('landing-view-container');
+    if (!landingContainer) return;
+
+    const lastChild = landingContainer.lastElementChild;
+    if (lastChild) {
+        const lastChildRect = lastChild.getBoundingClientRect();
+        taglineEl.style.top = `${Math.round(lastChildRect.bottom + window.scrollY + 30)}px`;
+    } else {
+        const rect = landingContainer.getBoundingClientRect();
+        taglineEl.style.top = `${Math.round(rect.bottom + window.scrollY + 30)}px`;
+    }
+}
+
+function showTagline() {
+    const taglineEl = document.getElementById('hosting-tagline');
+    if (taglineEl) {
+        taglineEl.style.display = 'block';
+        positionTagline();
+        if (!taglineAnimationInterval) {
+            initializeTaglineAnimation();
+        }
+    }
+}
+
+function hideTagline() {
+    const taglineEl = document.getElementById('hosting-tagline');
+    if (taglineEl) {
+        taglineEl.style.display = 'none';
+        if (taglineAnimationInterval) {
+            clearInterval(taglineAnimationInterval);
+            taglineAnimationInterval = null;
+        }
+    }
 }
 
 export function showMusicControls() {
@@ -514,14 +559,16 @@ function hideSpikeball() {
 
 function setupModeToggle() {
     modeToggleContainerEl = document.getElementById('mode-toggle-container');
-    modeToggleEl = document.getElementById('mode-toggle-gif');
-    if (!modeToggleContainerEl || !modeToggleEl) return;
+    catModeIconEl = document.getElementById('mode-toggle-cat');
+    seriousModeIconEl = document.getElementById('mode-toggle-serious');
+    if (!modeToggleContainerEl || !catModeIconEl || !seriousModeIconEl) return;
 
     // Set initial image
     updateModeToggleImage(getSiteMode());
 
     // Click handler is the same for both
     modeToggleContainerEl.addEventListener('click', () => {
+        hideTooltip();
         const currentMode = getSiteMode();
         const newMode = currentMode === 'serious' ? 'cat' : 'serious';
         setSiteMode(newMode);
@@ -557,7 +604,7 @@ function setupModeToggle() {
 
         modeToggleContainerEl.addEventListener('touchstart', (event) => {
             if (tooltipIsVisible) return;
-            const tooltipText = modeToggleEl.dataset.tooltipText;
+            const tooltipText = modeToggleContainerEl.dataset.tooltipText;
             if (tooltipText) {
                 pressHoldTimeout = setTimeout(() => {
                     tooltipIsVisible = true;
@@ -584,7 +631,7 @@ function setupModeToggle() {
         };
 
         modeToggleContainerEl.addEventListener('mouseover', (event) => {
-            const tooltipText = modeToggleEl.dataset.tooltipText;
+            const tooltipText = modeToggleContainerEl.dataset.tooltipText;
             if (tooltipText) {
                 updateLastMouseEvent(event); // Set the initial mouse position
                 displayAndPositionTooltip(event, tooltipText); // Trigger the animation
@@ -596,21 +643,16 @@ function setupModeToggle() {
 }
 
 function updateModeToggleImage(mode) {
-    if (modeToggleEl) {
+    if (catModeIconEl && seriousModeIconEl && modeToggleContainerEl) {
         if (mode === 'serious') {
-            modeToggleEl.src = '/static/resources/cat-illustration.gif';
-            modeToggleEl.alt = 'Enter Cat Mode';
-            modeToggleEl.dataset.tooltipText = 'cat mode';
-            modeToggleEl.style.width = '70px';
-            modeToggleEl.style.height = '70px';
-        } else {
-            modeToggleEl.src = '/static/resources/briefcase.gif';
-            modeToggleEl.alt = 'Enter Serious Mode';
-            modeToggleEl.dataset.tooltipText = 'serious mode';
-            modeToggleEl.style.width = '80px';
-            modeToggleEl.style.height = '80px';
+            catModeIconEl.style.display = 'block';
+            seriousModeIconEl.style.display = 'none';
+            modeToggleContainerEl.dataset.tooltipText = 'cat mode';
+        } else { // cat mode
+            catModeIconEl.style.display = 'none';
+            seriousModeIconEl.style.display = 'block';
+            modeToggleContainerEl.dataset.tooltipText = 'serious mode';
         }
-        // Repositioning is now handled by the container
     }
 }
 
@@ -680,17 +722,23 @@ function updateLandingElementsForMode(mode) {
     if (mode === 'serious') {
         hideSpotifyEmbed();
         hideSpikeball();
+        showTagline();
     } else { // cat mode
         showSpotifyEmbed();
         showSpikeball();
+        hideTagline();
     }
 }
 
 
 // --- Initialization and Cleanup ---
 
-export function initialize() {
+export function initialize(dayOfYear) {
     console.log("Initializing landing page specifics...");
+    
+    // Set daily playlist ID
+    dailyPlaylistId = playlistIds[dayOfYear % playlistIds.length];
+
     
     // Original setup for console/about buttons
     setupLandingInterface();
@@ -713,6 +761,7 @@ export function initialize() {
 
     // Add resize listener to keep spotify embed positioned correctly
     window.addEventListener('resize', positionSpotifyEmbed);
+    window.addEventListener('resize', positionTagline);
 
     try { showModeToggle(); } catch (_) {}
     
@@ -732,9 +781,11 @@ export function cleanup() {
     hideSpotifyEmbed();
     hideSpikeball();
     hideModeToggle();
+    hideTagline();
     
     // Clean up the resize listener
     window.removeEventListener('resize', positionSpotifyEmbed);
+    window.removeEventListener('resize', positionTagline);
 
     // NOTE: The Spotify embed is now part of landing.html and will be removed
     // on page navigation. Music will not persist. The controller and API script
@@ -747,6 +798,109 @@ export function cleanup() {
  */
 function setupLandingInterface() {
     // This is called by initialize() now, no need for DOMContentLoaded listener
+}
+
+function initializeTaglineAnimation() {
+    const taglineEl = document.getElementById('hosting-tagline');
+    if (!taglineEl) return;
+
+    class TextScramble {
+        constructor(el) {
+            this.el = el;
+            this.chars = '!<>-_\\/[]{}—=+*^?#________';
+            this.update = this.update.bind(this);
+        }
+        setText(newText) {
+            const oldText = this.el.innerText;
+            const length = Math.max(oldText.length, newText.length);
+            const promise = new Promise((resolve) => this.resolve = resolve);
+            this.queue = [];
+            for (let i = 0; i < length; i++) {
+                const from = oldText[i] || '';
+                const to = newText[i] || '';
+                const start = Math.floor(Math.random() * 40);
+                const end = start + Math.floor(Math.random() * 40);
+                this.queue.push({ from, to, start, end });
+            }
+            if (this.frameRequest) {
+                cancelAnimationFrame(this.frameRequest);
+            }
+            this.frame = 0;
+            this.update();
+            return promise;
+        }
+        update() {
+            let output = '';
+            let complete = 0;
+            for (let i = 0, n = this.queue.length; i < n; i++) {
+                let { from, to, start, end, char } = this.queue[i];
+                if (this.frame >= end) {
+                    complete++;
+                    output += to;
+                } else if (this.frame >= start) {
+                    if (!char || Math.random() < 0.28) {
+                        char = this.randomChar();
+                        this.queue[i].char = char;
+                    }
+                    output += `<span class="dud">${char}</span>`;
+                } else {
+                    output += from;
+                }
+            }
+            this.el.innerHTML = output;
+            if (complete === this.queue.length) {
+                this.resolve();
+            } else {
+                this.frameRequest = requestAnimationFrame(this.update);
+                this.frame++;
+            }
+        }
+        randomChar() {
+            return this.chars[Math.floor(Math.random() * this.chars.length)];
+        }
+    }
+
+    const allPhrases = [
+        "Least boring hosting service.",
+        "Zero extortion.",
+        "Leave anytime, and take your website with you.",
+        "Automatic backups to Google Drive.",
+        "Access your infrastructure through GCP.",
+        "24 hour customer support.",
+        "The only open source hosting platform.",
+        "We <3 our customers."
+    ];
+
+    // Shuffle the rest of the phrases
+    for (let i = allPhrases.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [allPhrases[i], allPhrases[j]] = [allPhrases[j], allPhrases[i]];
+    }
+
+    const phrases = ["We make websites.", ...allPhrases];
+    let currentIndex = 0;
+    const scramble = new TextScramble(taglineEl);
+
+    function cyclePhrases() {
+        scramble.setText(phrases[currentIndex]);
+        currentIndex = (currentIndex + 1) % phrases.length;
+    }
+
+    const handleTaglineClick = () => {
+        if (taglineAnimationInterval) {
+            clearInterval(taglineAnimationInterval);
+        }
+        cyclePhrases();
+        taglineAnimationInterval = setInterval(cyclePhrases, 8000);
+    };
+    
+    if (!taglineEl.dataset.clickAttached) {
+        taglineEl.addEventListener('click', handleTaglineClick);
+        taglineEl.dataset.clickAttached = 'true';
+    }
+
+    cyclePhrases();
+    taglineAnimationInterval = setInterval(cyclePhrases, 8000);
 }
 
 // --- Global Setup (runs when module is loaded) ---

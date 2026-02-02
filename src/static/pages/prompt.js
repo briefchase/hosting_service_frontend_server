@@ -1,5 +1,5 @@
 import { fetchWithAuth, API_BASE_URL } from '/static/main.js';
-import { getUser } from '/static/scripts/authenticate.js';
+import { getUser, clearPendingReauthAction } from '/static/scripts/authenticate.js';
 import { purchaseDomain as apiPurchaseDomain, checkDomainAvailability as apiCheckDomainAvailability } from '/static/scripts/domains.js';
 import { openPopup } from '/static/scripts/popup.js';
 
@@ -274,6 +274,10 @@ function cleanupPromptUI() {
  * Forcefully cancels an active prompt and cleans up the UI.
  */
 export function cancelCurrentPrompt() {
+    // When a prompt is cancelled, we must also clear any pending re-auth action
+    // that might have triggered it. This prevents unexpected actions later.
+    clearPendingReauthAction();
+
     if (isPrompting && currentResolve) {
         console.log("[Prompt] Forcefully cancelling active prompt.");
         currentResolve({ status: 'canceled', value: null });
@@ -598,20 +602,30 @@ function _handleOptionsPrompt(promptContentWrapper, promptConfig) {
     const { options } = promptConfig;
     if (!options || options.length === 0) return;
 
-            const optionsContainer = document.createElement('div');
-            optionsContainer.className = 'prompt-options-container';
-            options.forEach(option => {
-                const optionButton = document.createElement('button');
-                const text = typeof option === 'object' ? option.label : option;
-                const value = typeof option === 'object' ? option.value : option;
-                const decoded = decodeHtmlEntities(String(text ?? ''));
-                const sanitized = sanitizeAllowedInlineHtml(decoded);
-                optionButton.innerHTML = sanitized;
-                optionButton.className = 'prompt-option-button';
-                optionButton.onclick = () => currentResolve({ status: 'answered', value: value });
-                optionsContainer.appendChild(optionButton);
-            });
-            promptContentWrapper.appendChild(optionsContainer);
+    const optionsContainer = document.createElement('div');
+    optionsContainer.className = 'prompt-options-container';
+    options.forEach(option => {
+        const optionButton = document.createElement('button');
+        const text = typeof option === 'object' ? option.label : option;
+        const value = typeof option === 'object' ? option.value : option;
+        const url = typeof option === 'object' ? option.url : null;
+
+        const decoded = decodeHtmlEntities(String(text ?? ''));
+        const sanitized = sanitizeAllowedInlineHtml(decoded);
+        optionButton.innerHTML = sanitized;
+        optionButton.className = 'prompt-option-button';
+        
+        optionButton.onclick = () => {
+            if (url) {
+                openPopup(url);
+                // Do not resolve, let the user click another button
+            } else {
+                currentResolve({ status: 'answered', value: value });
+            }
+        };
+        optionsContainer.appendChild(optionButton);
+    });
+    promptContentWrapper.appendChild(optionsContainer);
 }
 
 function _handleEmbeddedCheckoutPrompt(promptContentWrapper, promptConfig) {

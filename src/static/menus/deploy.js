@@ -21,6 +21,7 @@ import {
 } from '/static/pages/prompt.js';
 // Import the new WebSocket connection function
 import { establishWebSocketConnection } from '/static/scripts/socket.js';
+import { handleTerminalMessage } from '/static/pages/terminal.js';
 import { requireAuthAndSubscription } from '/static/scripts/authenticate.js';
 
 
@@ -40,6 +41,7 @@ let activeDeployment = {
  */
 function cancelActiveDeployment(reason, statusMessage) {
     console.log(`[DEPLOY CANCELLATION] Reason: ${reason}. Deployment ID: ${activeDeployment.deploymentId}`);
+    window.dispatchEvent(new CustomEvent('deploymentstatechange', { detail: { isActive: false } }));
     document.body.classList.remove('deployment-loading');
     
     // Explicitly clean up UI state that might have been set by the terminal view
@@ -90,6 +92,7 @@ menus['deploy-menu'] = {
             text: 'simple', 
             type: 'button', 
             action: 'handleDeploySimple',
+            showLoading: true,
             tooltip: 'fast, feature complete, skips dumb questions (reccomended)'
         },
         /*{ 
@@ -104,6 +107,7 @@ menus['deploy-menu'] = {
             text: 'advanced', 
             type: 'button', 
             action: 'handleDeployAdvanced',
+            showLoading: true,
             tooltip: 'asks unimportant questions scenic route (fun)' 
         },
     ],
@@ -121,6 +125,7 @@ menus['deploy-menu'] = {
 // --- Deployment Initiation ---
 async function _initiateDeployment(params = {}, deploymentType) {
     updateStatusDisplay(`Starting deployment…`, 'info');
+    window.dispatchEvent(new CustomEvent('deploymentstatechange', { detail: { isActive: true } }));
     document.body.classList.add('deployment-loading');
 
     updateAccountButtonVisibility(false); // Hide account button
@@ -266,8 +271,20 @@ async function communicate(ws, deploymentId) {
     updateBackButtonHandler(deploymentBackButtonHandler);
 
     ws.onmessage = async (event) => {
+        // If the terminal view is active, delegate all message handling to its
+        // specialized processor and stop further execution in this handler.
+        if (terminalApi) {
+            handleTerminalMessage(event, {
+                printLine: terminalApi.addOutput,
+                enableInput: terminalApi.enableInput,
+                disableInput: terminalApi.disableInput,
+            });
+            return; // <-- CRITICAL FIX: Prevents double-processing.
+        }
+
+        // The original, pre-terminal logic for prompts and status updates
+        // that happen before the terminal view is loaded.
         try {
-            console.log("RAW WEBSOCKET MESSAGE:", event.data); // <-- ADDING LOGGING HERE
             const data = JSON.parse(event.data);
             const { event: eventName, payload } = data;
 
@@ -281,7 +298,6 @@ async function communicate(ws, deploymentId) {
                 case 'FATAL_ERROR':
                     handleFatalErrorEvent(payload);
                     break;
-                // Add a case for a future explicit completion event
                 case 'DEPLOYMENT_COMPLETE':
                     handleDeploymentCompleteEvent(payload);
                     break;
@@ -357,6 +373,12 @@ async function communicate(ws, deploymentId) {
     }
 
     async function handlePromptUserEvent(payload) {
+        // If the prompt payload has a URL, open it in a popup.
+        if (payload.url) {
+            const { openPopup } = await import('/static/scripts/popup.js');
+            openPopup(payload.url);
+        }
+
         try {
             const answer = await prompt(payload); // The payload is the prompt config
             // Send a structured response back to the worker
@@ -377,43 +399,37 @@ async function communicate(ws, deploymentId) {
     }
 
     function handleDeploymentCompleteEvent(payload) {
-        const messageText = payload.finalMessage || "Deployment finished.";
-        
-        // This function will handle the final cleanup and transition.
-        const finalizeAndReturn = () => {
-            document.removeEventListener('keydown', keydownHandler); // Clean up listener
-            
-            // Re-use the cancellation logic to clean up UI, but provide a success message.
-            // Using a specific reason for clarity in logs.
-            cancelActiveDeployment("deployment_complete", "Deployment successful.");
+        const promptConfig = payload.prompt || {
+            id: 'deployment-complete-prompt',
+            type: 'options',
+            text: payload.finalMessage || "Deployment finished.",
+            options: ['OK']
         };
 
-        // This handler will listen for the Enter key.
-        const keydownHandler = (event) => {
-            if (event.key === 'Enter') {
-                event.preventDefault();
-                finalizeAndReturn();
+        prompt(promptConfig).then(result => {
+            if (ws && ws.readyState < WebSocket.CLOSING) {
+                ws.close();
             }
-        };
 
-        if (terminalApi) {
-            terminalApi.addOutput(messageText, 'info');
-            terminalApi.addOutput("\nPress Enter to continue...", 'system'); // Use 'system' or a similar class for styling
-            terminalApi.disableInput(); // Keep input disabled
-            document.addEventListener('keydown', keydownHandler);
-        } else {
-            // If for some reason the terminal view isn't active, fall back to a prompt.
-            // This makes the system more robust.
-            prompt({
-                id: 'deployment-complete-fallback',
-                type: 'options',
-                text: messageText,
-                options: ['OK']
-            }).then(finalizeAndReturn);
-        }
+            if (result && result.status === 'answered' && result.value === 'view_resource' && result.context && result.context.site_id) {
+                const siteId = result.context.site_id;
+                console.log(`Transitioning to view site: ${siteId}`);
+                
+                // Perform a clean shutdown of the deployment state without navigating.
+                unregisterBackButtonHandler();
+                clearPromptStack();
+                activeDeployment.ws = null;
+                activeDeployment.deploymentId = null;
+                window.dispatchEvent(new CustomEvent('deploymentstatechange', { detail: { isActive: false } }));
+                document.body.classList.remove('deployment-loading');
 
-        if (ws && ws.readyState < WebSocket.CLOSING) {
-            ws.close();
-        }
+                // Now, navigate directly to the site view.
+                loadConsoleView({ specialNav: 'viewSite', siteId: siteId });
+
+            } else {
+                // Default behavior: return to the menu with a success message.
+                cancelActiveDeployment("deployment_complete", "Deployment successful.");
+            }
+        });
     }
 }

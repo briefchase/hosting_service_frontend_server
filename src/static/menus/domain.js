@@ -46,15 +46,9 @@ async function promptForNewDomain(context) {
     }
 
 async function _listDomainsLogic(params) {
-    const { renderMenu } = params;
-    renderMenu({
-        id: 'domain-menu',
-        text: 'loading...',
-        items: [{ text: 'fetching domains...', type: 'record' }],
-        backTarget: 'resource-menu'
-    });
-
+    const { renderMenu, updateStatusDisplay } = params;
     try {
+        updateStatusDisplay('fetching domains...', 'info');
         const data = await fetchDomains();
         
         // Handle the "no deployments" message from the backend

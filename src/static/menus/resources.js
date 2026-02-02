@@ -11,6 +11,7 @@ const resourceMenuConfig = {
             text: 'sites', 
             action: 'listSites', 
             type: 'button',
+            showLoading: true,
             tooltip: 'manage and destroy deployed sites' 
         },
         { 
@@ -18,6 +19,7 @@ const resourceMenuConfig = {
             text: 'machines',
             action: 'listMachines',
             type: 'button',
+            showLoading: true,
             tooltip: 'view and ssh into virtual machines'
         },
         { 
@@ -25,6 +27,7 @@ const resourceMenuConfig = {
             text: 'domains', 
             action: 'listDomains', 
             type: 'button',
+            showLoading: true,
             tooltip: 'manage domains and dns records'
         },
         {

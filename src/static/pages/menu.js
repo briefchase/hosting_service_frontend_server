@@ -26,6 +26,15 @@ let tooltipTimeout = null; // Store the timeout ID for the tooltip
 let tooltipAnimationInterval = null; // Store the interval for the typewriter effect
 let lastMouseEvent = null; // Store the last mouse event for desktop positioning
 
+// --- Deployment State Listener ---
+// Listens for events from deploy.js to know when to hide the site title.
+let isDeploymentActive = false;
+window.addEventListener('deploymentstatechange', (e) => {
+    isDeploymentActive = !!e.detail.isActive;
+    // When the state changes, immediately re-run the collision check.
+    checkHeaderCollision();
+});
+
 /**
  * Allows other modules to update the last known mouse event, enabling shared tooltip logic.
  * @param {MouseEvent|null} event - The latest mouse event, or null to clear it.
@@ -47,9 +56,9 @@ export function updateAuthState(newUserState) {
  * Hides the site title if it overlaps with either the back or account buttons.
  */
 export function checkHeaderCollision() {
-    // If terminal view is active, the title should always be hidden.
-    if (document.body.classList.contains('terminal-view-active')) {
-        updateSiteTitleVisibility(false);
+    // If the menu is in a loading state, or if the terminal is active, do not interfere.
+    // The functions that manage these states are responsible for title visibility.
+    if ((menuContainerElement && menuContainerElement.dataset.loading === 'true') || document.body.classList.contains('terminal-view-active')) {
         return;
     }
 
@@ -124,7 +133,12 @@ function generateListItemsHTML(items) {
         const targetAttr = item.targetMenu ? ` data-target-menu="${item.targetMenu}"` : '';
         const actionAttr = item.action ? ` data-action="${item.action}"` : '';
         const tooltipDataAttr = item.tooltip ? ` data-tooltip-text="${String(item.tooltip).replace(/"/g, '&quot;')}"` : '';
-        const allDataAttrs = `${targetAttr}${actionAttr}${customDataAttrs}${tooltipDataAttr}`;
+        let allDataAttrs = `${targetAttr}${actionAttr}${customDataAttrs}${tooltipDataAttr}`;
+        
+        // Add a class for the loading indicator
+        if (item.showLoading) {
+            allDataAttrs += ` data-show-loading="true"`;
+        }
         
         // The class determines the visual style
         const isClickable = allDataAttrs.length > 0;
@@ -163,6 +177,10 @@ function generateMenuHTML(menuConfig, menuId) {
 // Function to render a specific menu
 // Exporting renderMenu in case action handlers need it directly
 export async function renderMenu(menuIdOrConfig) {
+    if (menuContainerElement) {
+        delete menuContainerElement.dataset.loading;
+        delete menuContainerElement.dataset.previousMenu;
+    }
     if (!menuContainerElement) {
          console.error("Menu container not initialized.");
          return;
@@ -294,6 +312,7 @@ export async function renderMenu(menuIdOrConfig) {
 
     // Render the menu based on the current state of the config
     if (dynamicMenuTitleElement) { // Update dynamic title
+        dynamicMenuTitleElement.style.display = ''; // Ensure title is visible
         if (typeof menuConfig.text === 'function') {
             dynamicMenuTitleElement.textContent = menuConfig.text(); // Call the function for dynamic title
         } else if (menuConfig.text) {
@@ -606,77 +625,13 @@ export function initializeMenu(containerElement, handlers, userState) {
     const siteContainer = document.getElementById('console-container');
     if (siteContainer && !siteContainer.dataset.listenerAttached) {
         siteContainer.dataset.listenerAttached = 'true'; // Mark as attached
-        siteContainer.addEventListener('click', async (event) => {
-            const target = event.target;
 
-            // Handle static header buttons first
-            if (target.id === 'back-button' && target.dataset.targetMenu) {
-                console.log(`Navigating (back) to menu: ${target.dataset.targetMenu}`);
-                renderMenu(target.dataset.targetMenu);
-                return; // Handled
-            }
-            // Account button clicks are now handled differently:
-            // - If text is 'authenticate', main.js listener handles it.
-            // - If text is 'account', it has data-target-menu, so this listener handles it.
-            if (target.id === 'account-button' && target.dataset.targetMenu) {
-                 console.log(`Navigating to menu via account button: ${target.dataset.targetMenu}`);
-                 renderMenu(target.dataset.targetMenu);
-                 return; // Handled
-            }
+        // --- Event Listener using Delegation ---
+        // We define the handlers first, then attach the main click listener at the end
+        // so it can close over the necessary cleanup functions.
 
-            // Then handle dynamic menu item clicks (LI elements) using closest to support nested clicks/text nodes
-            const li = (target && target.closest) ? target.closest('li') : null;
-            if (!li) return;
-            if (!li.dataset.targetMenu && !li.dataset.action) return;
-
-            const targetMenu = li.dataset.targetMenu;
-            const action = li.dataset.action;
-            const resourceId = li.dataset.resourceId;
-            const directive = li.dataset.directive;
-            const returnPage = li.dataset.returnPage;
-            const returnMenu = li.dataset.returnMenu;
-
-            if (targetMenu) {
-                // Clear status before navigating to a new menu
-                try { clearStatusDisplay(); } catch (_) {}
-                console.log(`Navigating to menu: ${targetMenu}`);
-                renderMenu(targetMenu);
-            } else if (action) {
-                // Construct params object by collecting all data attributes from the element
-                const params = { ...li.dataset }; // Clone the dataset object
-                
-                // Pass other necessary context if needed by handlers
-                params.renderMenu = renderMenu;
-                params.updateStatusDisplay = updateStatusDisplay;
-                params.menuContainer = menuContainerElement;
-                params.menuTitle = dynamicMenuTitleElement;
-                
-                console.log(`Action triggered: ${action} with params:`, params);
-                // Call the appropriate handler from the provided map
-                if (actionHandlers[action]) {
-                    try {
-                        // Pass the constructed params object
-                        await actionHandlers[action](params);
-                    } catch (error) {
-                        console.error(`Error executing action "${action}":`, error);
-                         // Display error in the menu container
-                         // Update the menu config to show the error temporarily
-                         const currentMenuId = menuContainerElement.querySelector('.menu')?.id || 'dashboard-menu'; // Guess current menu or default
-                         menuContainerElement.innerHTML = `<p>Error performing action: ${error.message}</p><span class="back-button" data-target-menu="${currentMenuId}">&lt; back</span>`;
-                         if (dynamicMenuTitleElement) dynamicMenuTitleElement.textContent = 'Error'; // Update title on action error
-                    }
-                } else {
-                    console.warn(`No handler found for action: ${action}`);
-                }
-            } else {
-                 // This case should ideally not happen if it's a menu-button without target/action
-                 console.log(`Menu button clicked (no action/nav defined): ${target.textContent} (id: ${target.id})`);
-            }
-        });
-
-        // --- Add Tooltip Listeners --- START ---
-        // Use a more reliable check for touch-primary devices.
         const isTouchDevice = window.matchMedia("(pointer: coarse)").matches;
+        let onMouseLeave = () => {}; // No-op for touch devices, redefined for desktop
 
         if (isTouchDevice) {
             // --- Mobile: Press and Hold Logic ---
@@ -725,7 +680,8 @@ export function initializeMenu(containerElement, handlers, userState) {
                 displayAndPositionTooltip(event);
             };
 
-            const onMouseLeave = () => {
+            // Redefine the outer-scoped onMouseLeave with the desktop-specific logic.
+            onMouseLeave = () => {
                 hideTooltip();
                 if (currentLi) {
                     currentLi.removeEventListener('mousemove', onMouseMove);
@@ -750,7 +706,119 @@ export function initializeMenu(containerElement, handlers, userState) {
                 }
             });
         }
-        // --- Add Tooltip Listeners --- END ---
+        
+        // --- Main Click Handler ---
+        // Attaching this last allows it to use the `onMouseLeave` function defined above.
+        siteContainer.addEventListener('click', async (event) => {
+            // On any click within the container, perform a full tooltip state cleanup.
+            // For desktop, this clears hover state. For mobile, touchend has already fired.
+            onMouseLeave();
+
+            const target = event.target;
+
+            // Handle static header buttons first
+            if (target.id === 'back-button') {
+                if (menuContainerElement && menuContainerElement.dataset.loading === 'true') {
+                    // If loading, cancel and restore the previous menu
+                    console.log('Back clicked during loading, restoring previous menu.');
+                    const previousMenuId = menuContainerElement.dataset.previousMenu;
+                    if (previousMenuId) {
+                        renderMenu(previousMenuId);
+                    }
+                    // The renderMenu call will clear the loading state attributes and status
+                    return; 
+                }
+                
+                if (target.dataset.targetMenu) {
+                    console.log(`Navigating (back) to menu: ${target.dataset.targetMenu}`);
+                    renderMenu(target.dataset.targetMenu);
+                    return; // Handled
+                }
+            }
+
+            // Account button clicks are now handled differently:
+            // - If text is 'authenticate', main.js listener handles it.
+            // - If text is 'account', it has data-target-menu, so this listener handles it.
+            if (target.id === 'account-button' && target.dataset.targetMenu) {
+                 console.log(`Navigating to menu via account button: ${target.dataset.targetMenu}`);
+                 renderMenu(target.dataset.targetMenu);
+                 return; // Handled
+            }
+
+            // Then handle dynamic menu item clicks (LI elements) using closest to support nested clicks/text nodes
+            const li = (target && target.closest) ? target.closest('li') : null;
+            if (!li) return;
+            if (!li.dataset.targetMenu && !li.dataset.action) return;
+
+            const targetMenu = li.dataset.targetMenu;
+            const action = li.dataset.action;
+            const resourceId = li.dataset.resourceId;
+            const directive = li.dataset.directive;
+            const returnPage = li.dataset.returnPage;
+            const returnMenu = li.dataset.returnMenu;
+
+            if (targetMenu) {
+                // Clear status before navigating to a new menu
+                try { clearStatusDisplay(); } catch (_) {}
+                console.log(`Navigating to menu: ${targetMenu}`);
+                renderMenu(targetMenu);
+            } else if (action) {
+                // --- Generic Loading UI ---
+                if (li.dataset.showLoading === 'true') {
+                    // Hide menu items
+                    if (menuContainerElement) {
+                        const listContainer = menuContainerElement.querySelector('#menu-list-container');
+                        if (listContainer) {
+                            listContainer.innerHTML = ''; // Just clear the menu buttons
+                        }
+                    }
+                    // Hide both titles
+                    if (dynamicMenuTitleElement) {
+                        dynamicMenuTitleElement.style.display = 'none';
+                    }
+                    updateSiteTitleVisibility(false);
+
+                    // Set loading state and store the menu to return to
+                    if (menuContainerElement) {
+                        menuContainerElement.dataset.loading = "true";
+                        menuContainerElement.dataset.previousMenu = currentMenuId;
+                    }
+                }
+
+                // Construct params object by collecting all data attributes from the element
+                const params = { ...li.dataset }; // Clone the dataset object
+                
+                // Pass other necessary context if needed by handlers
+                params.renderMenu = renderMenu;
+                params.updateStatusDisplay = updateStatusDisplay;
+                params.menuContainer = menuContainerElement;
+                params.menuTitle = dynamicMenuTitleElement;
+                
+                console.log(`Action triggered: ${action} with params:`, params);
+                // Call the appropriate handler from the provided map
+                if (actionHandlers[action]) {
+                    try {
+                        // Pass the constructed params object
+                        await actionHandlers[action](params);
+                    } catch (error) {
+                        console.error(`Error executing action "${action}":`, error);
+                         // Display error in the menu container
+                         // Update the menu config to show the error temporarily
+                         const currentMenuId = menuContainerElement.querySelector('.menu')?.id || 'dashboard-menu'; // Guess current menu or default
+                         menuContainerElement.innerHTML = `<p>Error performing action: ${error.message}</p><span class="back-button" data-target-menu="${currentMenuId}">&lt; back</span>`;
+                         if (dynamicMenuTitleElement) dynamicMenuTitleElement.textContent = 'Error'; // Update title on action error
+                    } finally {
+                        // Action handlers are now responsible for setting the final title.
+                        // We no longer need to generically remove rainbow text.
+                    }
+                } else {
+                    console.warn(`No handler found for action: ${action}`);
+                }
+            } else {
+                 // This case should ideally not happen if it's a menu-button without target/action
+                 console.log(`Menu button clicked (no action/nav defined): ${target.textContent} (id: ${target.id})`);
+            }
+        });
     }
 }
 

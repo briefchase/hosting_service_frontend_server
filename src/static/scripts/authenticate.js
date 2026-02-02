@@ -99,6 +99,17 @@ async function handleAuthenticationSuccess(userSession) {
     }
 }
 
+/**
+ * Clears any pending action that was stored for re-execution after authentication.
+ * This should be called when the user cancels an auth flow.
+ */
+export function clearPendingReauthAction() {
+    if (window.pendingReauthAction) {
+        console.log("Clearing pending re-authentication action.");
+        window.pendingReauthAction = null;
+    }
+}
+
 
 // --- Core Logic ---
 
@@ -328,7 +339,7 @@ export function requireAuthAndSubscription(actionFn, actionName, options = {}) {
         // 2. Subscription Check (conditional)
         if (!skipSubscription && !skipSubscriptionCheck) {
             try {
-                updateStatusDisplay("Checking subscription status…", "info");
+                updateStatusDisplay("checking subscription...", "info");
                 const response = await fetchWithAuth(`${API_BASE_URL}/subscription-status`);
                 if (!response.ok) {
                     const errorData = await response.json().catch(() => ({})); // try to get error details
@@ -380,7 +391,6 @@ export function requireAuthAndSubscription(actionFn, actionName, options = {}) {
 
         // 4. All checks passed, execute the original action
         try {
-            clearStatusDisplay(); // Clear status message
             await actionFn(params);
         } catch (error) {
             // This final catch handles cases where the actionFn itself triggers a 401 error.

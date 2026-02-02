@@ -1,7 +1,11 @@
+// website/src/static/pages/terminal.js
+
 import { API_BASE_URL } from '/static/main.js';
 import { getUser } from '/static/scripts/authenticate.js';
 import { establishWebSocketConnection } from '/static/scripts/socket.js'; // Import the new function
-import { unregisterBackButtonHandler } from '/static/main.js';
+import { unregisterBackButtonHandler, returnFromTerminal } from '/static/main.js';
+import { prompt } from '/static/pages/prompt.js';
+
 
 let ws = null;
 let terminalOutput = null;
@@ -144,7 +148,10 @@ export function initializeTerminal(params) {
 export function cleanupTerminal() {
     console.log('Cleaning up terminal...');
     if (ws) {
-        ws.close();
+        // Don't close the shared websocket, just remove its listeners
+        ws.onmessage = null;
+        ws.onerror = null;
+        ws.onclose = null;
         ws = null;
     }
     if (terminalInput) {
@@ -164,4 +171,46 @@ export function cleanupTerminal() {
 
     // Unregister terminal back button handler
     unregisterBackButtonHandler();
+}
+
+// This function will be attached to the WebSocket by the calling module (e.g., deploy.js)
+export async function handleTerminalMessage(event, { printLine, enableInput, disableInput }) {
+    const data = JSON.parse(event.data);
+    const { event: eventType, payload } = data;
+
+    switch (eventType) {
+        case 'UPDATE_STATUS':
+            if (payload.text) {
+                printLine(payload.text, payload.level || 'info');
+            }
+            break;
+        case 'PROMPT_USER':
+            // The main session listener in deployment.js will handle this.
+            // This function is for display only.
+            break;
+        case 'DEPLOYMENT_COMPLETE':
+            if (payload.finalMessage) {
+                printLine(payload.finalMessage, 'success');
+            }
+            if (payload.prompt) {
+                setTimeout(async () => {
+                    const result = await prompt(payload.prompt);
+                    if (result.status === 'answered' && result.value === 'view_resource') {
+                        const siteId = payload.prompt.context.site_id;
+                        returnFromTerminal({ specialNav: 'viewSite', siteId });
+                    }
+                }, 100);
+            }
+            printLine("Press any key to continue.", 'system');
+            enableInput();
+            break;
+        case 'FATAL_ERROR':
+            printLine(`ERROR: ${payload.message}`, 'error');
+            printLine("Session terminated. Press any key to continue.", 'system');
+            enableInput();
+            break;
+        default:
+            // Generic event logging if needed
+            break;
+    }
 }

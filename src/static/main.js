@@ -1,5 +1,7 @@
+// website/src/static/main.js
+
 // Define the base API URL here
-export const API_BASE_URL = 'https://api.webserversupplyco.com';
+export const API_BASE_URL = 'https://api.servercult.com';
 
 // Import the main menu initialization function from the common module
 import { initializeMenu, renderMenu, cleanupCurrentMenu } from '/static/pages/menu.js';
@@ -40,7 +42,7 @@ import '/static/menus/resources.js';
 import '/static/menus/domain.js';
 import '/static/menus/usage.js';
 import '/static/menus/firewall.js';
-import '/static/menus/site.js'; // Imports registration and handlers
+import '/static/menus/site.js';
 import '/static/menus/backup.js'; // <-- Add import for backup.js
 import '/static/menus/subscription.js';
 import '/static/menus/machine.js';
@@ -57,6 +59,7 @@ let terminalReturnParams = null; // Store params for returning from terminal
 // --- Site Mode State ---
 let siteMode = 'serious'; // 'serious' or 'cat'
 let backgroundUrl = ''; // To store the current background
+export let dayOfYear;
 
 export function getSiteMode() {
     return siteMode;
@@ -225,7 +228,8 @@ function clearConsoleContent() {
     // Remove all children of consoleContainer EXCEPT the headerContainer and pre-rendered elements
     const spotifyWrapper = document.getElementById('spotify-embed-wrapper');
     const modeToggle = document.getElementById('mode-toggle-container');
-    const elementsToKeep = [headerContainer, landingView, footerView, spotifyWrapper, modeToggle];
+    const hostingTagline = document.getElementById('hosting-tagline');
+    const elementsToKeep = [headerContainer, landingView, footerView, spotifyWrapper, modeToggle, hostingTagline];
     let child = consoleContainer.lastChild;
     while (child) {
         let nextChild = child.previousSibling;
@@ -331,7 +335,7 @@ async function loadLandingView() {
     setupLandingViewListeners();
 
     const landingModule = await import('/static/pages/landing.js');
-    landingModule.initialize();
+    landingModule.initialize(dayOfYear);
     currentPageCleanup = landingModule.cleanup;
 
     // Apply special text effects after content is loaded
@@ -403,6 +407,16 @@ export async function loadConsoleView(param) {
 
     initializeMenu(menuContainerElement, actionHandlers, currentUser);
 
+    // --- Start: New logic for special navigation ---
+    if (param && typeof param === 'object' && param.specialNav === 'viewSite') {
+        if (param.siteId) {
+            const { viewSite } = await import('/static/menus/site.js');
+            await viewSite(param.siteId);
+        }
+        return; // Stop further processing to prevent default menu render
+    }
+    // --- End: New logic ---
+
     let initialMenuIdToRender = 'dashboard-menu'; // Default
     let onComplete = null;
 
@@ -422,7 +436,7 @@ export async function loadConsoleView(param) {
             // Still render the menu in the background for structure
             renderMenu(param.menuId || initialMenuIdToRender); 
         } else {
-            console.warn(`loadConsoleView called with unexpected parameter type: ${param}. Rendering default menu.`);
+            // This case now handles the onComplete object without other params
             renderMenu(initialMenuIdToRender);
         }
     } else {
@@ -470,10 +484,8 @@ export async function loadTerminalView(params = {}) {
     }
 
     // Ensure terminal HTML is loaded first
-    // Clear previous content from console-container, *except the header*
-    while (consoleContainer.lastChild && consoleContainer.lastChild !== headerContainer) {
-        consoleContainer.removeChild(consoleContainer.lastChild);
-    }
+    // Clear previous content from console-container, preserving landing page elements
+    clearConsoleContent();
     const terminalHTML = await fetchHTML('/templates/terminal.html');
     consoleContainer.insertAdjacentHTML('beforeend', terminalHTML);
     console.log("Terminal HTML loaded into console-container.");
@@ -740,13 +752,19 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // Keep a consistent font for the title (no randomization)
 
+    const now = new Date();
+    const start = new Date(now.getFullYear(), 0, 0);
+    const diff = now - start;
+    const oneDay = 1000 * 60 * 60 * 24;
+    dayOfYear = Math.floor(diff / oneDay);
+
     // Load background image, store it, and set initial state
     try {
         const manifestResp = await fetch('/static/resources/backgrounds/manifest.json');
         if (manifestResp.ok) {
             const files = await manifestResp.json();
             if (Array.isArray(files) && files.length > 0) {
-                const chosenBg = files[Math.floor(Math.random() * files.length)];
+                const chosenBg = files[dayOfYear % files.length];
                 backgroundUrl = `url('/static/resources/backgrounds/${chosenBg}')`;
                 // Initialize in serious mode (no background)
                 document.body.style.backgroundImage = 'none';
@@ -756,7 +774,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     // Import all functions that can be triggered by menu actions.
     const { handleDeploySimple, handleDeployAdvanced } = await import('/static/menus/deploy.js');
-    const { listSites, destroySite, destroyDeployment } = await import('/static/menus/site.js');
+    const { listSites, destroySite, destroyDeployment, openAddress } = await import('/static/menus/site.js');
     const { listMachines, destroyMachine, renameMachine } = await import('/static/menus/machine.js');
     const { listDomains, handleRegisterNewDomain } = await import('/static/menus/domain.js');
     const { getUsage } = await import('/static/menus/usage.js');
@@ -775,6 +793,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         listMachines: listMachines,
         destroySite: destroySite,
         destroyDeployment: destroyDeployment,
+        openAddress: openAddress,
         destroyMachine: destroyMachine,
         renameMachine: renameMachine,
         listDomains: listDomains,

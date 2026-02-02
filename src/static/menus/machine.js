@@ -1,25 +1,20 @@
-import { menus } from '/static/pages/menu.js';
+import { menus, renderMenu, updateStatusDisplay } from '/static/pages/menu.js';
 import { requireAuthAndSubscription } from '/static/scripts/authenticate.js';
-import { fetchSites } from '/static/scripts/utilities.js';
+import { fetchSites as apiFetchSites } from '/static/scripts/utilities.js';
 import {
     API_BASE_URL,
     fetchWithAuth,
     updateAccountButtonVisibility,
     updateSiteTitleVisibility,
 } from '/static/main.js';
-import { clearPromptStack, prompt } from '/static/pages/prompt.js';
+import { prompt } from '/static/pages/prompt.js';
 
-let fetchedVms = []; // Store the raw VM data
+// No more global cache.
 
-function machineDetailsMenuId(id) {
-    return `machine-details-menu-${id}`;
-}
-
-function generateMachineDetailsMenu(vmId) {
-    const vm = fetchedVms.find(v => v.id === vmId);
+function generateMachineDetailsMenu(vm) {
     if (!vm) {
         return {
-            id: `machine-details-error-${vmId}`,
+            id: `machine-details-error-generic`,
             text: 'Error',
             items: [{ id: 'machine-not-found', text: 'Machine details not found.', type: 'record' }],
             backTarget: 'machine-list-menu'
@@ -61,73 +56,75 @@ function generateMachineDetailsMenu(vmId) {
         items: deploymentItems
     });
 
-    const menuActions = [
-        { id: `rename-machine-${vm.id}`, text: 'rename', action: 'renameMachine', params: { machineId: vm.id, currentName: vm.name } },
-        { id: `connect-machine-${vm.id}`, text: 'connect', action: 'connectToMachine', params: { machineId: vm.id } },
-    ];
-
-    // Add connect and destroy buttons
-    detailItems.push({ id: `connect-vm-${vm.id}`, text: '<s>connect</s>', type: 'button', resourceId: vm.id });
-    detailItems.push({ id: `rename-vm-${vm.id}`, text: 'rename', type: 'button', action: 'renameMachine', resourceId: vm.id });
-    detailItems.push({ id: `destroy-vm-${vm.id}`, text: 'destroy', type: 'button', action: 'destroyMachine', resourceId: vm.id });
+    // Add connect and destroy buttons with all necessary data for their actions.
+    detailItems.push({ 
+        id: `connect-vm-${vm.id}`, 
+        text: '<s>connect</s>', 
+        type: 'button', 
+        resourceId: vm.id 
+    });
+    detailItems.push({ 
+        id: `rename-vm-${vm.id}`, 
+        text: 'rename', 
+        type: 'button', 
+        action: 'renameMachine', 
+        resourceId: vm.id,
+        machineName: vm.name,
+        zone: vm.zone
+    });
+    detailItems.push({ 
+        id: `destroy-vm-${vm.id}`, 
+        text: 'destroy', 
+        type: 'button', 
+        action: 'destroyMachine', 
+        resourceId: vm.id,
+        machineName: vm.name
+    });
 
     return {
-        id: machineDetailsMenuId(vm.id),
+        id: `machine-details-menu-${vm.id}`,
         text: `Machine: ${vm.name}`,
         items: detailItems,
         backTarget: 'machine-list-menu'
     };
 }
 
+async function fetchAndProcessMachines() {
+    // The `fetchSites` utility actually returns the VM-centric structure.
+    return await apiFetchSites();
+}
 
-// This is the core logic, to be wrapped by our security guard.
-async function _listMachinesLogic({ renderMenu, updateStatusDisplay }) {
-    renderMenu({
+function cacheAllMachineMenus(vms) {
+    const machineItems = vms.map(vm => ({
+        id: `machine-${vm.id}`,
+        text: vm.name,
+        type: 'button',
+        targetMenu: `machine-details-menu-${vm.id}`,
+        resourceId: vm.id
+    }));
+
+    if (machineItems.length === 0) {
+         machineItems.push({ id: 'no-machines', text: 'no machines found', type: 'record' });
+    }
+
+    menus['machine-list-menu'] = {
         id: 'machine-list-menu',
-        text: 'loading...',
-        items: [{ text: 'fetching machines...', type: 'record' }],
+        text: 'machines:',
+        items: machineItems,
         backTarget: 'resource-menu'
+    };
+    
+    vms.forEach(vm => {
+        menus[`machine-details-menu-${vm.id}`] = generateMachineDetailsMenu(vm);
     });
+}
 
+async function _listMachinesLogic({ renderMenu, updateStatusDisplay }) {
     try {
-        // fetchSites now returns the new VM-centric structure
-        const vms = await fetchSites();
-        fetchedVms = vms; // Cache the data
-        let machineItems = [];
-        let emptyMessage = 'no machines found';
-
-        if (Array.isArray(vms) && vms.length > 0) {
-            machineItems = vms.map(vm => ({
-                id: `machine-${vm.id}`,
-                text: vm.name, // e.g., "vm-1677628800"
-                type: 'button',
-                targetMenu: machineDetailsMenuId(vm.id),
-                resourceId: vm.id
-            }));
-        }
-        
-        if (machineItems.length === 0) {
-             machineItems.push({ id: 'no-machines', text: emptyMessage, type: 'record' });
-        }
-
-        const finalConfig = {
-            id: 'machine-list-menu',
-            text: 'machines:',
-            items: machineItems,
-            backTarget: 'resource-menu'
-        };
-        
-        // Cache the generated menu
-        menus['machine-list-menu'] = finalConfig;
-        
-        // Generate and cache the details menus for each machine
-        fetchedVms.forEach(vm => {
-            menus[machineDetailsMenuId(vm.id)] = generateMachineDetailsMenu(vm.id);
-        });
-
-        // Render the final menu
+        updateStatusDisplay('fetching machines...', 'info');
+        const vms = await fetchAndProcessMachines();
+        cacheAllMachineMenus(vms);
         renderMenu('machine-list-menu');
-
     } catch (error) {
         renderMenu({
             id: 'machine-list-menu',
@@ -138,22 +135,15 @@ async function _listMachinesLogic({ renderMenu, updateStatusDisplay }) {
     }
 }
 
-// Action handler to destroy a VM
 export const destroyMachine = requireAuthAndSubscription(async (params) => {
-    const { resourceId, renderMenu, updateStatusDisplay, menuContainer, menuTitle } = params;
-    if (!resourceId) {
-        return updateStatusDisplay('Missing machine ID for destruction.', 'error');
+    const { machineName, renderMenu, updateStatusDisplay, menuContainer, menuTitle } = params;
+    if (!machineName) {
+        return updateStatusDisplay('Missing machine name for destruction.', 'error');
     }
 
-    const vm = fetchedVms.find(v => v.id === resourceId);
-    if (!vm) {
-        return updateStatusDisplay('Machine data not found for destroy operation.', 'error');
-    }
-
-    const { prompt } = await import('/static/pages/prompt.js');
     const confirmation = await prompt({
         id: 'confirm-destroy-vm-prompt',
-        text: `Are you sure you want to destroy the entire machine '${vm.name}' and ALL its deployments? This cannot be undone.`,
+        text: `Are you sure you want to destroy the entire machine '${machineName}' and ALL its deployments? This cannot be undone.`,
         type: 'options',
         options: [{ label: 'yes', value: 'yes' }, { label: 'no', value: 'no' }]
     });
@@ -162,14 +152,13 @@ export const destroyMachine = requireAuthAndSubscription(async (params) => {
         return updateStatusDisplay('Machine destruction cancelled.', 'info');
     }
 
-    // --- Start: Show Loading GIF & Rainbow Text ---
     document.body.classList.add('deployment-loading');
     updateAccountButtonVisibility(false);
     updateSiteTitleVisibility(false);
     if (menuContainer) {
         const listContainer = menuContainer.querySelector('#menu-list-container');
         if (listContainer) {
-            listContainer.innerHTML = ''; // Clear the menu buttons
+            listContainer.innerHTML = '';
             const loadingGif = document.createElement('img');
             loadingGif.src = '/static/resources/happy-cat.gif';
             loadingGif.alt = 'Loading...';
@@ -181,12 +170,11 @@ export const destroyMachine = requireAuthAndSubscription(async (params) => {
             menuTitle.classList.add('rainbow-text');
         }
     }
-    // --- End: Show Loading GIF & Rainbow Text ---
 
     try {
         const response = await fetchWithAuth(`${API_BASE_URL}/destroy`, {
             method: 'POST',
-            body: { vm_name: vm.name }
+            body: { vm_name: machineName }
         });
 
         const result = await response.json();
@@ -196,83 +184,65 @@ export const destroyMachine = requireAuthAndSubscription(async (params) => {
         }
 
         updateStatusDisplay(result.message || 'Machine destroyed successfully.', 'success');
-        // Go back to the list and refresh it
         await _listMachinesLogic({ renderMenu, updateStatusDisplay });
 
     } catch (e) {
         console.error('Destroy machine error:', e);
         updateStatusDisplay(`Could not destroy machine: ${e.message}`, 'error');
     } finally {
-        // --- Start: Hide Loading GIF & Rainbow Text ---
         document.body.classList.remove('deployment-loading');
         if (menuTitle) {
             menuTitle.classList.remove('rainbow-text');
         }
-        // --- End: Hide Loading GIF & Rainbow Text ---
     }
 }, 'destroy a machine');
 
-// Action handler for renaming a machine
 export const renameMachine = requireAuthAndSubscription(async (params) => {
-    const { machineId, currentName } = params;
-    if (!machineId) {
-        console.error("No machineId provided for rename action");
-        return;
-    }
-
-    // Find the VM details from the cached list
-    const vm = (window.cachedVms || []).find(v => v.id === machineId);
-    if (!vm) {
-        console.error(`Could not find VM with id ${machineId} in cache.`);
-        return;
+    const { machineName, zone, renderMenu, updateStatusDisplay } = params;
+    if (!machineName || !zone) {
+        return updateStatusDisplay('Missing machine data for rename.', 'error');
     }
 
     const newNamePrompt = await prompt({
         id: 'rename-vm-prompt',
-        text: `Enter new name for machine '${currentName}':`,
+        text: `Enter new name for machine '${machineName}':`,
         type: 'text',
-        defaultValue: currentName,
+        defaultValue: machineName,
         showContinueButton: true,
         validationRegex: '^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$',
-        validationError: 'Name must be 1-63 characters, start and end with a letter/number, and contain only lowercase letters, numbers, or hyphens.'
+        validationError: 'Name must be 1-63 characters, start/end with a letter/number, and can only contain lowercase letters, numbers, or hyphens.'
     });
 
-    if (newNamePrompt.status !== 'answered' || !newNamePrompt.value || newNamePrompt.value === currentName) {
-        console.log('VM rename cancelled or name unchanged.');
-        return;
+    if (newNamePrompt.status !== 'answered' || !newNamePrompt.value || newNamePrompt.value === machineName) {
+        return updateStatusDisplay('Rename cancelled or name unchanged.', 'info');
     }
 
     const newName = newNamePrompt.value;
 
-    openPopup('loading', 'Renaming machine...');
+    updateStatusDisplay('Renaming machine...');
 
     try {
         const response = await fetchWithAuth(`/api/rename`, {
             method: 'POST',
             body: {
-                vm_name: vm.name,
-                zone: vm.zone,
+                vm_name: machineName,
+                zone: zone,
                 new_display_name: newName
             }
         });
 
         const result = await response.json();
-        closePopup();
 
         if (response.ok) {
-            openPopup('success', 'Machine renamed successfully!');
-            // Invalidate cache and refresh the machine list to show the new name
-            window.cachedVms = null;
-            listMachines(); // Assumes listMachines is available in scope to refresh the view
+            updateStatusDisplay('Machine renamed successfully!', 'success');
+            await _listMachinesLogic({ renderMenu, updateStatusDisplay });
         } else {
             throw new Error(result.error || 'Failed to rename machine.');
         }
     } catch (error) {
         console.error('Error renaming machine:', error);
-        openPopup('error', `Error: ${error.message}`);
+        updateStatusDisplay(`Error: ${error.message}`, 'error');
     }
 });
 
-
-// Export the guarded function as the main action handler.
 export const listMachines = requireAuthAndSubscription(_listMachinesLogic, 'view machines');

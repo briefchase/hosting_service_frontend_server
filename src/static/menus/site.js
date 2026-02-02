@@ -2,31 +2,25 @@ import { menus, renderMenu, updateStatusDisplay } from '/static/pages/menu.js';
 import {
     API_BASE_URL,
     fetchWithAuth,
-    loadConsoleView,
-    updateBackButtonHandler,
-    unregisterBackButtonHandler,
     updateAccountButtonVisibility,
-    updateSiteTitleVisibility,
-    returnFromTerminal
+    updateSiteTitleVisibility
 } from '/static/main.js';
 import { requireAuthAndSubscription } from '/static/scripts/authenticate.js';
-import { fetchSites } from '/static/scripts/utilities.js';
-import { prompt, cancelCurrentPrompt } from '/static/pages/prompt.js';
-import { establishWebSocketConnection } from '/static/scripts/socket.js';
+import { fetchSites as apiFetchSites } from '/static/scripts/utilities.js';
+import { prompt } from '/static/pages/prompt.js';
 
-let fetchedSites = [];
-let fetchedVms = []; // Store the raw VM data
+// No more global cache. Data is fetched on demand.
 
-function generateSiteDetailsMenu(siteId) {
-    const site = fetchedSites.find(i => i.id === siteId);
+function generateSiteDetailsMenu(site) {
     if (!site) {
         return {
-            id: `site-details-error-${siteId}`,
+            id: `site-details-error-generic`,
             text: 'Error',
             items: [{ id: 'site-not-found', text: 'Site details not found.', type: 'record' }],
             backTarget: 'site-list-menu'
         };
     }
+
     let address = 'N/A';
     let addressUrl = null;
     if (site.domain) {
@@ -44,13 +38,32 @@ function generateSiteDetailsMenu(siteId) {
         ? { id: `details-address-${site.id}`, text: `Address: ${address}`, type: 'record', action: 'openAddress', url: addressUrl }
         : { id: `details-address-${site.id}`, text: `Address: ${address}`, type: 'record' };
 
-    // (Details menu generation logic remains the same)
     let detailItems = [
         { id: `details-machine-name-${site.id}`, text: `Machine: ${site.machine_name || 'Unknown'}`, type: 'record' },
         { id: `details-schedule-${site.id}`, text: `Backups: ${site.backup_schedule || 'manual'}`, type: 'record' },
         addressItem,
-        { id: `deployment-destroy-${site.id}`, text: 'destroy', type: 'button', action: 'destroyDeployment', resourceId: site.id }
-            ];
+    ];
+
+    if (site.wordpress) {
+        const adminUrl = addressUrl ? `${addressUrl}/wp-admin` : null;
+        if (adminUrl) {
+            detailItems.push({ id: `details-wp-admin-${site.id}`, text: 'admin panel', type: 'button', action: 'openAddress', url: adminUrl });
+        }
+    }
+
+    // Pass necessary data for the destroy action via data attributes.
+    // menu.js will convert camelCase properties to kebab-case data attributes.
+    detailItems.push({ 
+        id: `deployment-destroy-${site.id}`, 
+        text: 'destroy', 
+        type: 'button', 
+        action: 'destroyDeployment', 
+        showLoading: true, // Opt-in to the generic loading UI
+        resourceId: site.id,
+        deployment: site.deployment,
+        machineName: site.machine_name
+    });
+
     return {
         id: `site-details-menu-${site.id}`,
         text: `Site: ${site.name}`,
@@ -59,50 +72,36 @@ function generateSiteDetailsMenu(siteId) {
     };
 }
 
-// This is the core logic, to be wrapped by our guard.
-async function _listSitesLogic(params) {
-    const { renderMenu } = params;
-    renderMenu({
-        id: 'site-list-menu',
-        text: 'loading...',
-        items: [{ text: 'fetching sites...', type: 'record' }],
-        backTarget: 'resource-menu'
-    });
-
-    try {
-        const vms = await fetchSites();
+async function fetchAndProcessDeployments() {
+    const vms = await apiFetchSites();
         let allDeployments = [];
-        let emptyMessage = 'no sites found';
-
-        // Flatten the nested structure from the API into a single list of deployments
         if (Array.isArray(vms)) {
             vms.forEach(vm => {
                 if (vm.deployments && vm.deployments.length > 0) {
                     const deployments = vm.deployments.map(dep => ({
-                        // Create a unique ID for the deployment for the UI
                         id: `${vm.id}-${dep.deployment_name}`,
                         name: dep.deployment_name,
-                        // Carry over necessary parent VM and specific deployment info
-                        deployment: dep.deployment_name, // for destroy action
-                        project_id: vm.id, // The VM id is the project_id for destroy
+                    deployment: dep.deployment_name,
+                    project_id: vm.id,
                         machine_name: vm.name,
                         status: vm.status,
                         ip_address: vm.ip_address,
                         domain: dep.domain,
                         port: dep.port,
+                    wordpress: dep.wordpress,
                         zone: vm.zone,
                         backup_schedule: dep.backup_schedule,
-                        type: 'deployment' // A new type to distinguish from old structure
+                    type: 'deployment'
                     }));
                     allDeployments.push(...deployments);
                 }
             });
         }
-        
-        fetchedSites = allDeployments; // This now stores the flattened list of deployments
-        fetchedVms = vms; // Keep the original VM data if needed elsewhere
+    return allDeployments;
+}
 
-        const siteItems = allDeployments.map(item => {
+function cacheAllSiteMenus(sites) {
+    const siteItems = sites.map(item => {
             const isDisabled = item.status === 'provisioning';
             return {
                 id: `site-${item.id}`,
@@ -115,21 +114,27 @@ async function _listSitesLogic(params) {
         });
 
         if (siteItems.length === 0) {
-             siteItems.push({ id: 'no-sites', text: emptyMessage, type: 'record' });
+         siteItems.push({ id: 'no-sites', text: 'no sites found', type: 'record' });
         }
 
-        const finalConfig = {
+    menus['site-list-menu'] = {
             id: 'site-list-menu',
             text: 'sites:',
             items: siteItems,
             backTarget: 'resource-menu'
         };
-        menus['site-list-menu'] = finalConfig;
 
-        fetchedSites.forEach(site => {
-            menus[siteDetailsMenuId(site.id)] = generateSiteDetailsMenu(site.id);
-        });
+    sites.forEach(site => {
+        menus[`site-details-menu-${site.id}`] = generateSiteDetailsMenu(site);
+    });
+}
 
+async function _listSitesLogic(params) {
+    const { renderMenu, updateStatusDisplay } = params;
+    try {
+        updateStatusDisplay('fetching sites...', 'info');
+        const sites = await fetchAndProcessDeployments();
+        cacheAllSiteMenus(sites);
         renderMenu('site-list-menu');
     } catch (error) {
         renderMenu({
@@ -141,30 +146,52 @@ async function _listSitesLogic(params) {
     }
 }
 
-function siteDetailsMenuId(id) {
-    return `site-details-menu-${id}`;
-}
-
-// Export the guarded function as the main action handler.
 export const listSites = requireAuthAndSubscription(_listSitesLogic, 'view sites'); 
 
-// Action handler to destroy a deployment
-export const destroyDeployment = requireAuthAndSubscription(async (params) => {
-    const { resourceId, renderMenu, menuContainer, menuTitle } = params;
-    if (!resourceId) {
-        updateStatusDisplay('Missing site ID for destruction.', 'error');
-        return;
-    }
+export async function viewSite(siteId) {
+    // Check if the site details are already cached from a recent fetch.
+    if (menus[`site-details-menu-${siteId}`]) {
+        // If cached, render it directly for a fast transition.
+        renderMenu(`site-details-menu-${siteId}`);
+    } else {
+        // If not cached (e.g., direct navigation after deployment), show a loading state.
+        renderMenu({
+            id: `site-details-menu-${siteId}`,
+            text: 'site:', // Lowercase as requested
+            items: [{ id: 'loading-site', text: 'loading...', type: 'record' }],
+            backTarget: 'site-list-menu'
+        });
 
-    const site = fetchedSites.find(i => i.id === resourceId);
-    if (!site || !site.machine_name || !site.deployment) {
+        try {
+            // Fetch all sites to update the cache.
+            const sites = await fetchAndProcessDeployments();
+            cacheAllSiteMenus(sites); // Re-builds all menus with fresh data
+            
+            // Now that the cache is populated, render the menu with the real data.
+            renderMenu(`site-details-menu-${siteId}`);
+        } catch (error) {
+            console.error(`Error fetching site details for ${siteId}:`, error);
+            renderMenu({
+                id: `site-details-error-${siteId}`,
+                text: 'Error',
+                items: [{ id: 'site-fetch-error', text: `Could not load site: ${error.message}`, type: 'record' }],
+                backTarget: 'site-list-menu'
+            });
+        }
+    }
+} 
+
+export const destroyDeployment = requireAuthAndSubscription(async (params) => {
+    const { deployment, machineName, renderMenu, menuContainer, menuTitle } = params;
+
+    if (!deployment || !machineName) {
         updateStatusDisplay('Site data is incomplete for destroy operation.', 'error');
         return;
     }
 
     const confirmation = await prompt({
         id: 'confirm-destroy-prompt',
-        text: `Are you sure you want to destroy the deployment '${site.deployment}'? This cannot be undone.`,
+        text: `Are you sure you want to destroy the deployment '${deployment}'? This cannot be undone.`,
         type: 'options',
         options: [{ label: 'yes', value: 'yes' }, { label: 'no', value: 'no' }]
     });
@@ -174,34 +201,13 @@ export const destroyDeployment = requireAuthAndSubscription(async (params) => {
         return;
     }
 
-    // --- Start: Show Loading GIF & Rainbow Text ---
-    document.body.classList.add('deployment-loading');
-    updateAccountButtonVisibility(false);
-    updateSiteTitleVisibility(false);
-    if (menuContainer) {
-        const listContainer = menuContainer.querySelector('#menu-list-container');
-        if (listContainer) {
-            listContainer.innerHTML = ''; // Clear the menu buttons
-            const loadingGif = document.createElement('img');
-            loadingGif.src = '/static/resources/happy-cat.gif';
-            loadingGif.alt = 'Loading...';
-            loadingGif.className = 'loading-gif';
-            listContainer.appendChild(loadingGif);
-        }
-        if (menuTitle) {
-            menuTitle.textContent = 'destroying';
-            menuTitle.classList.add('rainbow-text');
-        }
-    }
-    // --- End: Show Loading GIF & Rainbow Text ---
-
     try {
         updateStatusDisplay('Initiating destruction...', 'info');
         const response = await fetchWithAuth(`${API_BASE_URL}/destroy`, {
             method: 'POST',
             body: {
-                vm_name: site.machine_name,
-                deployment: site.deployment
+                vm_name: machineName,
+                deployment: deployment
             }
         });
 
@@ -211,58 +217,47 @@ export const destroyDeployment = requireAuthAndSubscription(async (params) => {
             throw new Error(result.error || 'Failed to start destruction task.');
         }
 
-        // The destroy process is now always in the background.
-        // We just show the success message and refresh the list.
         updateStatusDisplay(result.message, 'success');
         
-        // Refresh the site list to show the change
-        _listSitesLogic({ renderMenu });
+        // After destruction, refresh the list of sites.
+        // Pass both renderMenu and updateStatusDisplay as required by _listSitesLogic.
+        await _listSitesLogic({ renderMenu, updateStatusDisplay });
 
     } catch (e) {
         console.error('Destroy error:', e);
         updateStatusDisplay(`Could not destroy: ${e.message}`, 'error');
-    } finally {
-        // --- Start: Hide Loading GIF & Rainbow Text ---
-        document.body.classList.remove('deployment-loading');
+        // The generic handler will clear the rainbow text, but we should
+        // ensure the title is reset to something sensible on error.
         if (menuTitle) {
-            menuTitle.classList.remove('rainbow-text');
+            menuTitle.textContent = 'error';
         }
-        // --- End: Hide Loading GIF & Rainbow Text ---
     }
 }, 'destroy a deployment');
 
-// Action handler to open an address in a new tab
 export function openAddress(params) {
-    const { item } = params;
-    if (item && item.url) {
-        window.open(item.url, '_blank', 'noopener,noreferrer');
+    if (params && params.url) {
+        window.open(params.url, '_blank', 'noopener,noreferrer');
     }
 }
 
-// Action handler to destroy a VM site
 export async function destroySite(params) {
-    try {
-        const { resourceId } = params;
-        if (!resourceId) {
-            updateStatusDisplay('missing site id', 'error');
-            return;
-        }
-        // resourceId is now a composite ID like "vm-timestamp-deployment-name"
-        const site = fetchedSites.find(i => i.id === resourceId);
-        if (!site || !site.machine_name || !site.deployment) {
+    const { deployment, machineName, renderMenu } = params;
+    if (!deployment || !machineName) {
             updateStatusDisplay('Site data is incomplete for destroy operation.', 'error');
             return;
         }
+    
+    try {
         updateStatusDisplay('destroying...', 'info');
         const response = await fetchWithAuth(`${API_BASE_URL}/destroy`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ vm_name: site.machine_name, deployment: site.deployment })
+            body: JSON.stringify({ vm_name: machineName, deployment: deployment })
         });
         const data = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(data.error || 'failed to destroy');
         updateStatusDisplay('destroy requested', 'success');
-        // Refresh sites list
+        
         await _listSitesLogic({ renderMenu });
         updateStatusDisplay('', 'info');
     } catch (e) {

@@ -235,7 +235,7 @@ body.prompt-overlay-active #console-container {
 /* Specific styles for landing container */
 #landing-view-container {
     width: 220px; /* Set specific width */
-    align-items: flex-start; /* Left-align ITEMS INSIDE the container */
+    align-items: center; /* Center ITEMS INSIDE the container */
     /* justify-content remains center to vertically center the box */
 }
 
@@ -267,14 +267,14 @@ body.prompt-overlay-active #console-container {
 
 /* Style Landing Options as Records with Hover Effect - Updated */
 #landing-view-container .landing-option {
-    padding: 5px 10px; /* Reduced vertical padding, added horizontal */
-    margin-bottom: 5px; /* Spacing */
-    /* min-width: 220px; Removed */
+    padding: 10px 20px;
+    margin-bottom: 10px;
     width: fit-content; /* Make width fit content */
-    text-align: left; /* Left-align text inside */
+    text-align: center; /* Center text inside */
     cursor: pointer; /* Keep pointer cursor as they are clickable */
     color: white; /* Default text color */
     background-color: transparent; /* Ensure default background is transparent */
+    border: 1px solid white;
     transition: background-color 0.3s, color 0.3s;
     -webkit-user-select: none; /* Safari */
     -ms-user-select: none; /* IE 10+ */
@@ -407,6 +407,22 @@ body.prompt-overlay-active #console-container {
     background-color: white;
     color: black;
 }
+
+#hosting-tagline {
+    position: absolute; /* Keep absolute for JS positioning */
+    left: 50%;
+    transform: translateX(-50%);
+    color: white;
+    white-space: nowrap;
+    z-index: 10;
+    display: none; /* Hide by default, will be shown by JS */
+}
+
+#hosting-tagline .dud {
+    color: white;
+}
+
+
 
 
 /* Main App Menu Title Styling */
