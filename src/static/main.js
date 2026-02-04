@@ -33,6 +33,27 @@ import {
 // Import the music controls from landing.js
 import { showMusicControls, hideMusicControls, positionMusicControls } from '/static/pages/landing.js';
 
+function handlePopState(event) {
+    const state = event.state;
+    // Determine the target view from the state. Default to landing.
+    const targetView = (state && state.view === 'app') ? 'app' : 'landing';
+
+    // Determine current view category
+    const currentViewCategory = (currentView === 'landing') ? 'landing' : 'app';
+
+    if (targetView === currentViewCategory) {
+        // We are already displaying the correct category of view.
+        // This might happen with forward/back inside the same state.
+        return;
+    }
+
+    if (targetView === 'app') {
+        loadConsoleView();
+    } else { // targetView is 'landing'
+        loadLandingView();
+    }
+}
+
 // --- Import Menu Configurations ---
 // These self-register with common.js
 import '/static/menus/dashboard.js';
@@ -293,6 +314,7 @@ function setupLandingViewListeners() {
  * Loads and displays the landing view from landing.html.
  */
 async function loadLandingView() {
+    history.replaceState({ view: 'landing' }, '', window.location.pathname.split('#')[0]);
     currentView = 'landing'; // Update view state to 'landing'
     terminalReturnParams = null; // Clear return params
     unregisterBackButtonHandler(); // Clear any existing handler
@@ -349,6 +371,9 @@ async function loadLandingView() {
  * @param {string} [initialMenuId] - Optional menu ID to render initially.
  */
 export async function loadConsoleView(param) {
+    if (history.state?.view !== 'app') {
+        history.pushState({ view: 'app' }, '', '#app');
+    }
     // Refresh user state from sessionStorage every time the console is loaded
     updateCurrentUserState();
 
@@ -530,7 +555,8 @@ export function returnFromTerminal(params) {
         currentTerminalAPI.cleanup();
         currentTerminalAPI = null;
     }
-    cleanupTerminal(); // Clean up any terminal-specific resources or intervals
+    // The call above handles all necessary cleanup. The direct call below was redundant.
+    // cleanupTerminal(); 
 
     // Restore visibility of main content containers that were hidden for terminal view
     const mainContent = document.getElementById('main-content');
@@ -555,6 +581,9 @@ export function returnFromTerminal(params) {
  * Loads and displays the About view from about.html.
  */
 async function loadAboutView() {
+    if (history.state?.view !== 'app') {
+        history.pushState({ view: 'app' }, '', '#app');
+    }
     currentView = 'about'; // Update view state
     terminalReturnParams = null; // Clear terminal params
     
@@ -776,10 +805,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     const { handleDeploySimple, handleDeployAdvanced } = await import('/static/menus/deploy.js');
     const { listSites, destroySite, destroyDeployment, openAddress } = await import('/static/menus/site.js');
     const { listMachines, destroyMachine, renameMachine } = await import('/static/menus/machine.js');
-    const { listDomains, handleRegisterNewDomain } = await import('/static/menus/domain.js');
+    const { listDomains, handleRegisterNewDomain, relinkDomain } = await import('/static/menus/domain.js');
     const { getUsage } = await import('/static/menus/usage.js');
     const { handleSubscribe, handleCancelSubscription } = await import('/static/menus/subscription.js');
-    const { listDeploymentsForBackup, createScriptBackup, showRestoreMenu, selectDeploymentForRestore, confirmRestore, showScheduleMenu, promptBackupSchedule } = await import('/static/menus/backup.js');
+    const { listDeploymentsForBackup, createScriptBackup, showRestoreMenu, selectMachineForRestore, confirmRestore, showScheduleMenu, promptBackupSchedule } = await import('/static/menus/backup.js');
     const { handleRescind } = await import('/static/menus/account.js');
     // --- END: Action Handler Imports ---
 
@@ -798,12 +827,13 @@ document.addEventListener('DOMContentLoaded', async () => {
         renameMachine: renameMachine,
         listDomains: listDomains,
         registerDomain: handleRegisterNewDomain,
+        relinkDomain: relinkDomain,
         getUsage: getUsage,
         // Backup actions
         listDeploymentsForBackup: listDeploymentsForBackup,
         createScriptBackup: createScriptBackup,
         showRestoreMenu: showRestoreMenu,
-        selectDeploymentForRestore: selectDeploymentForRestore,
+        selectMachineForRestore: selectMachineForRestore,
         confirmRestore: confirmRestore,
         showScheduleMenu: showScheduleMenu,
         promptBackupSchedule: promptBackupSchedule,
@@ -854,6 +884,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Add a resize listener to check for header collisions
     window.addEventListener('resize', checkHeaderCollision);
 
+    window.addEventListener('popstate', handlePopState);
+
     // Initial load logic
     const urlParams = new URLSearchParams(window.location.search);
     const sessionId = urlParams.get('session_id');
@@ -893,3 +925,4 @@ document.addEventListener('DOMContentLoaded', async () => {
         console.log('Service Worker not supported in this browser.');
     }
 });
+

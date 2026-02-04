@@ -58,7 +58,7 @@ export function updateAuthState(newUserState) {
 export function checkHeaderCollision() {
     // If the menu is in a loading state, or if the terminal is active, do not interfere.
     // The functions that manage these states are responsible for title visibility.
-    if ((menuContainerElement && menuContainerElement.dataset.loading === 'true') || document.body.classList.contains('terminal-view-active')) {
+    if ((menuContainerElement && menuContainerElement.dataset.loading === 'true') || document.body.classList.contains('terminal-view-active') || isDeploymentActive) {
         return;
     }
 
@@ -300,7 +300,7 @@ export async function renderMenu(menuIdOrConfig) {
     }
 
     // Centralized account button logic
-    if (menuId === 'account-menu') {
+    if (menuId === 'account-menu' || isDeploymentActive) {
         updateAccountButtonVisibility(false);
     } else {
         updateAccountButtonVisibility(true, isAuthenticated);
@@ -777,6 +777,7 @@ export function initializeMenu(containerElement, handlers, userState) {
                         dynamicMenuTitleElement.style.display = 'none';
                     }
                     updateSiteTitleVisibility(false);
+                    updateAccountButtonVisibility(false);
 
                     // Set loading state and store the menu to return to
                     if (menuContainerElement) {

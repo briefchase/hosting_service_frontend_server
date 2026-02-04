@@ -29,16 +29,3 @@ export async function fetchSites(options = {}) {
         throw error;
     }
 }
-
-/**
- * Fetches all domains from the API.
- * @returns {Promise<any>} A promise that resolves to the raw JSON response from the API.
- * @throws {Error} Throws an error if the API call fails for a critical reason.
- */
-export async function fetchDomains() {
-    const response = await fetchWithAuth(`${API_BASE_URL}/domains`);
-    if (!response.ok) {
-        throw new Error(`Failed to fetch domains: ${response.statusText}`);
-    }
-    return response.json();
-}

@@ -803,6 +803,7 @@ function setupLandingInterface() {
 function initializeTaglineAnimation() {
     const taglineEl = document.getElementById('hosting-tagline');
     if (!taglineEl) return;
+    taglineEl.innerText = ''; // Clear static HTML text to ensure first animation runs.
 
     class TextScramble {
         constructor(el) {
@@ -862,6 +863,7 @@ function initializeTaglineAnimation() {
 
     const allPhrases = [
         "Least boring hosting service.",
+        "We make websites.",
         "Zero extortion.",
         "Leave anytime, and take your website with you.",
         "Automatic backups to Google Drive.",
@@ -877,12 +879,88 @@ function initializeTaglineAnimation() {
         [allPhrases[i], allPhrases[j]] = [allPhrases[j], allPhrases[i]];
     }
 
-    const phrases = ["We make websites.", ...allPhrases];
+    const phrases = ["We host websites.", ...allPhrases];
     let currentIndex = 0;
     const scramble = new TextScramble(taglineEl);
+    let idleAnimationTimeout = null;
+
+    let stopAllIdleAnimations = false;
+    let idleScrambleTimeouts = [];
+
+    const animateOneCharScramble = (position) => {
+        if (stopAllIdleAnimations) return;
+
+        const text = taglineEl.innerText;
+        const originalChar = text[position];
+        if (!originalChar || originalChar.trim() === '') return;
+
+        let changesCount = 0;
+        
+        // Skew towards lower numbers. 1 is most common, 5 is rarest.
+        const maxChanges = Math.floor(Math.pow(Math.random(), 3) * 5) + 1;
+
+        const changeChar = () => {
+            if (stopAllIdleAnimations) {
+                if (taglineEl.innerText[position] !== originalChar) {
+                    let textArray = taglineEl.innerText.split('');
+                    textArray[position] = originalChar;
+                    taglineEl.innerText = textArray.join('');
+                }
+                return;
+            }
+
+            if (changesCount >= maxChanges) {
+                if (taglineEl.innerText[position] !== originalChar) {
+                    let textArray = taglineEl.innerText.split('');
+                    textArray[position] = originalChar;
+                    taglineEl.innerText = textArray.join('');
+                }
+                return;
+            }
+
+            changesCount++;
+
+            let textArray = taglineEl.innerText.split('');
+            textArray[position] = scramble.randomChar();
+            taglineEl.innerText = textArray.join('');
+            
+            const delay = Math.pow(Math.random(), 5) * 999 + 1; // Skewed heavily towards shorter delays
+            setTimeout(changeChar, delay);
+        };
+
+        changeChar();
+    };
+
+    const scheduleIdleScramblesForInterval = () => {
+        if (stopAllIdleAnimations) return;
+
+        // 50% chance of no spawns. If spawns occur, skew towards fewer.
+        const numScrambles = Math.random() < 0.5 ? 0 : Math.floor(Math.pow(Math.random(), 2) * 3) + 1;
+
+        for (let i = 0; i < numScrambles; i++) {
+            const startDelay = Math.random() * 7000;
+            const timeoutId = setTimeout(() => {
+                if (stopAllIdleAnimations) return;
+                const text = taglineEl.innerText;
+                const len = text.length;
+                if (len > 0) {
+                    const position = Math.floor(Math.random() * len);
+                    animateOneCharScramble(position);
+                }
+            }, startDelay);
+            idleScrambleTimeouts.push(timeoutId);
+        }
+    };
 
     function cyclePhrases() {
-        scramble.setText(phrases[currentIndex]);
+        stopAllIdleAnimations = true;
+        idleScrambleTimeouts.forEach(clearTimeout);
+        idleScrambleTimeouts = [];
+
+        scramble.setText(phrases[currentIndex]).then(() => {
+            stopAllIdleAnimations = false;
+            scheduleIdleScramblesForInterval();
+        });
         currentIndex = (currentIndex + 1) % phrases.length;
     }
 

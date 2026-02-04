@@ -67,7 +67,8 @@ function generateMachineDetailsMenu(vm) {
         id: `rename-vm-${vm.id}`, 
         text: 'rename', 
         type: 'button', 
-        action: 'renameMachine', 
+        action: 'renameMachine',
+        showLoading: true, 
         resourceId: vm.id,
         machineName: vm.name,
         zone: vm.zone
@@ -77,6 +78,7 @@ function generateMachineDetailsMenu(vm) {
         text: 'destroy', 
         type: 'button', 
         action: 'destroyMachine', 
+        showLoading: true, // Opt-in to the generic loading UI
         resourceId: vm.id,
         machineName: vm.name
     });
@@ -136,9 +138,9 @@ async function _listMachinesLogic({ renderMenu, updateStatusDisplay }) {
 }
 
 export const destroyMachine = requireAuthAndSubscription(async (params) => {
-    const { machineName, renderMenu, updateStatusDisplay, menuContainer, menuTitle } = params;
-    if (!machineName) {
-        return updateStatusDisplay('Missing machine name for destruction.', 'error');
+    const { resourceId, machineName, renderMenu, updateStatusDisplay } = params;
+    if (!resourceId) {
+        return updateStatusDisplay('Missing machine ID for destruction.', 'error');
     }
 
     const confirmation = await prompt({
@@ -151,30 +153,12 @@ export const destroyMachine = requireAuthAndSubscription(async (params) => {
     if (confirmation.status !== 'answered' || confirmation.value !== 'yes') {
         return updateStatusDisplay('Machine destruction cancelled.', 'info');
     }
-
-    document.body.classList.add('deployment-loading');
-    updateAccountButtonVisibility(false);
-    updateSiteTitleVisibility(false);
-    if (menuContainer) {
-        const listContainer = menuContainer.querySelector('#menu-list-container');
-        if (listContainer) {
-            listContainer.innerHTML = '';
-            const loadingGif = document.createElement('img');
-            loadingGif.src = '/static/resources/happy-cat.gif';
-            loadingGif.alt = 'Loading...';
-            loadingGif.className = 'loading-gif';
-            listContainer.appendChild(loadingGif);
-        }
-        if (menuTitle) {
-            menuTitle.textContent = 'destroying';
-            menuTitle.classList.add('rainbow-text');
-        }
-    }
-
+    
     try {
+        updateStatusDisplay('Initiating destruction...', 'info');
         const response = await fetchWithAuth(`${API_BASE_URL}/destroy`, {
             method: 'POST',
-            body: { vm_name: machineName }
+            body: { vm_name: resourceId }
         });
 
         const result = await response.json();
@@ -189,17 +173,12 @@ export const destroyMachine = requireAuthAndSubscription(async (params) => {
     } catch (e) {
         console.error('Destroy machine error:', e);
         updateStatusDisplay(`Could not destroy machine: ${e.message}`, 'error');
-    } finally {
-        document.body.classList.remove('deployment-loading');
-        if (menuTitle) {
-            menuTitle.classList.remove('rainbow-text');
-        }
     }
 }, 'destroy a machine');
 
 export const renameMachine = requireAuthAndSubscription(async (params) => {
-    const { machineName, zone, renderMenu, updateStatusDisplay } = params;
-    if (!machineName || !zone) {
+    const { resourceId, machineName, zone, renderMenu, updateStatusDisplay } = params;
+    if (!resourceId || !zone) {
         return updateStatusDisplay('Missing machine data for rename.', 'error');
     }
 
@@ -222,10 +201,10 @@ export const renameMachine = requireAuthAndSubscription(async (params) => {
     updateStatusDisplay('Renaming machine...');
 
     try {
-        const response = await fetchWithAuth(`/api/rename`, {
+        const response = await fetchWithAuth(`${API_BASE_URL}/rename`, {
             method: 'POST',
             body: {
-                vm_name: machineName,
+                vm_id: resourceId,
                 zone: zone,
                 new_display_name: newName
             }
@@ -233,8 +212,9 @@ export const renameMachine = requireAuthAndSubscription(async (params) => {
 
         const result = await response.json();
 
-        if (response.ok) {
-            updateStatusDisplay('Machine renamed successfully!', 'success');
+        if (response.ok && result.success) {
+            updateStatusDisplay(result.message || 'Machine renamed successfully!', 'success');
+            // After successful rename, re-fetch and display the updated machine list.
             await _listMachinesLogic({ renderMenu, updateStatusDisplay });
         } else {
             throw new Error(result.error || 'Failed to rename machine.');
@@ -242,6 +222,9 @@ export const renameMachine = requireAuthAndSubscription(async (params) => {
     } catch (error) {
         console.error('Error renaming machine:', error);
         updateStatusDisplay(`Error: ${error.message}`, 'error');
+        // If the rename fails, we should still refresh the machine list
+        // to return the user to a stable state.
+        await _listMachinesLogic({ renderMenu, updateStatusDisplay });
     }
 });
 

@@ -11,11 +11,12 @@ import {
     returnFromTerminal
 } from '/static/main.js';
 import { fetchSites } from '/static/scripts/utilities.js';
-import { prompt, cancelCurrentPrompt } from '/static/pages/prompt.js';
+import { prompt, cancelCurrentPrompt, clearPromptStack } from '/static/pages/prompt.js';
 import { establishWebSocketConnection } from '/static/scripts/socket.js';
 
 
 let lastFetchedDeployments = [];
+let lastFetchedMachines = [];
 let activeRestore = {
     ws: null,
     deploymentId: null
@@ -29,7 +30,10 @@ let activeRestore = {
  */
 function _cancelActiveRestore(reason, statusMessage) {
     console.log(`[RESTORE CANCELLATION] Reason: ${reason}. Deployment ID: ${activeRestore.deploymentId}`);
+    window.dispatchEvent(new CustomEvent('deploymentstatechange', { detail: { isActive: false } }));
     document.body.classList.remove('deployment-loading');
+    document.body.classList.remove('terminal-view-active');
+    document.body.classList.remove('overlay-active');
     
     const { ws, deploymentId } = activeRestore;
 
@@ -50,11 +54,16 @@ function _cancelActiveRestore(reason, statusMessage) {
 
     unregisterBackButtonHandler();
     cancelCurrentPrompt();
-    
+    clearPromptStack();
+
+    // On success, go to resources menu. On failure/cancel, go back to backup menu.
+    const targetMenu = (reason === 'restore_complete') ? 'resources-menu' : 'backup-menu';
+    const messageType = (reason === 'restore_complete') ? 'success' : 'info';
+
     const params = { 
-        menuId: 'backup-menu', 
-        output: statusMessage || 'Restore cancelled.', 
-        type: 'info' 
+        menuId: targetMenu, 
+        output: statusMessage || 'Restore process ended.', 
+        type: messageType
     };
     
     // If the terminal is active, we need to exit it cleanly first
@@ -74,18 +83,29 @@ function _cancelActiveRestore(reason, statusMessage) {
 const _listDeploymentsForBackup = async ({ renderMenu, updateStatusDisplay }) => {
     try {
         updateStatusDisplay('fetching deployments...', 'info');
-        const deploymentsData = await fetchSites();
+        const vms = await fetchSites();
         let deployments = [];
         let emptyMessage = 'No deployments found.';
 
-        if (Array.isArray(deploymentsData)) {
-            if (deploymentsData.length === 1 && deploymentsData[0].id === 'no-deployments') {
-                emptyMessage = deploymentsData[0].name;
+        if (Array.isArray(vms)) {
+            if (vms.length === 1 && vms[0].id === 'no-deployments') {
+                emptyMessage = vms[0].name;
             } else {
-                deployments = deploymentsData.filter(item => item.id !== 'no-deployments');
+                vms.forEach(vm => {
+                    if (vm.deployments && vm.deployments.length > 0) {
+                        const deploymentsOnVm = vm.deployments.map(dep => ({
+                            id: `${vm.id}-${dep.deployment_name}`,
+                            name: dep.deployment_name,
+                            deployment: dep.deployment_name,
+                            vm_name: vm.name,
+                            project_id: vm.project_id,
+                        }));
+                        deployments.push(...deploymentsOnVm);
+                    }
+                });
             }
         } else {
-            console.warn("API response for /instances was not an array:", deploymentsData);
+            console.warn("API response for /instances was not an array:", vms);
         }
 
         lastFetchedDeployments = deployments;
@@ -103,7 +123,7 @@ const _listDeploymentsForBackup = async ({ renderMenu, updateStatusDisplay }) =>
 
         const menuItems = deployments.map(deployment => ({
             id: `backup-${deployment.id}`,
-            text: deployment.name,
+            text: `${deployment.name} on ${deployment.vm_name}`,
             type: 'record',
             action: 'createScriptBackup',
             resourceId: deployment.id
@@ -160,6 +180,7 @@ const _createScriptBackup = async ({ resourceId, renderMenu, updateStatusDisplay
 };
 
 const _showRestoreMenu = async ({ renderMenu, updateStatusDisplay }) => {
+    window.dispatchEvent(new CustomEvent('deploymentstatechange', { detail: { isActive: true } }));
     try {
         updateStatusDisplay('fetching backups...', 'info');
         const response = await fetchWithAuth(`${API_BASE_URL}/list-backups`);
@@ -183,7 +204,8 @@ const _showRestoreMenu = async ({ renderMenu, updateStatusDisplay }) => {
             id: `backup-file-${backup.id}`,
             text: backup.name,
             type: 'record',
-            action: 'selectDeploymentForRestore',
+            action: 'selectMachineForRestore',
+            showLoading: true,
             backupFilename: backup.name, // Pass the filename for display purposes
             backupFileId: backup.id      // Pass the file ID for backend operations
         }));
@@ -201,7 +223,7 @@ const _showRestoreMenu = async ({ renderMenu, updateStatusDisplay }) => {
     }
 };
 
-const _selectDeploymentForRestore = async (params) => {
+const _selectMachineForRestore = async (params) => {
     const { backupFilename, backupFileId, renderMenu, updateStatusDisplay } = params;
     if (!backupFilename) {
         updateStatusDisplay('Error: No backup file was selected.', 'error');
@@ -209,51 +231,62 @@ const _selectDeploymentForRestore = async (params) => {
     }
 
     try {
-        updateStatusDisplay('fetching deployments...', 'info');
-        const deploymentsData = await fetchSites();
-        let deployments = [];
-        let emptyMessage = 'No deployments found to restore to.';
-
-        if (Array.isArray(deploymentsData)) {
-            if (deploymentsData.length === 1 && deploymentsData[0].id === 'no-deployments') {
-                emptyMessage = deploymentsData[0].name;
-            } else {
-                deployments = deploymentsData.filter(item => item.id !== 'no-deployments');
-            }
-        }
-
-        lastFetchedDeployments = deployments;
+        updateStatusDisplay('fetching machines...', 'info');
+        const machines = await fetchSites(); 
+        
+        // Filter out the 'no-deployments' placeholder if it exists
+        lastFetchedMachines = machines.filter(m => m.id !== 'no-deployments');
         updateStatusDisplay('', 'info');
 
-        if (deployments.length === 0) {
+        let emptyMessage = 'No machines found to restore to.';
+        if (machines.length === 1 && machines[0].id === 'no-deployments') {
+            emptyMessage = machines[0].name;
+        }
+
+        const menuItems = lastFetchedMachines.map(machine => {
+            return {
+                id: `restore-to-machine-${machine.id}`,
+                text: machine.name, // Display the machine name
+                type: 'record',
+                action: 'confirmRestore',
+                showLoading: true,
+                resourceId: machine.id, // This is the machine ID
+                backupFilename: backupFilename,
+                backupFileId: backupFileId
+            };
+        });
+
+        // Always add the option to create a new machine
+        menuItems.push({
+            id: 'restore-to-new-machine',
+            text: 'new machine',
+            type: 'record',
+            action: 'confirmRestore',
+            showLoading: true,
+            resourceId: 'new_machine',
+            backupFilename: backupFilename,
+            backupFileId: backupFileId
+        });
+
+        if (lastFetchedMachines.length === 0) {
             renderMenu({
-                id: 'no-deployments-for-restore',
+                id: 'no-machines-for-restore',
                 text: emptyMessage,
-                items: [],
-                backTarget: 'backup-menu' // Or maybe 'select-backup-for-restore'?
+                items: menuItems, // Still show the 'new machine' option
+                backTarget: 'backup-menu'
             });
             return;
         }
 
-        const menuItems = deployments.map(deployment => ({
-            id: `restore-${deployment.id}`,
-            text: deployment.name,
-            type: 'record',
-            action: 'confirmRestore',
-            resourceId: deployment.id,
-            backupFilename: backupFilename, // Carry filename over
-            backupFileId: backupFileId      // Carry file ID over
-        }));
-
         renderMenu({
-            id: 'select-deployment-for-restore',
+            id: 'select-machine-for-restore',
             text: `restore ${backupFilename.substring(0, 20)}... to:`,
             items: menuItems,
-            backTarget: 'backup-menu' // Go back to the main backup menu
+            backTarget: 'backup-menu'
         });
 
     } catch (error) {
-        console.error("Error listing deployments for restore:", error);
+        console.error("Error listing machines for restore:", error);
         updateStatusDisplay(`Error: ${error.message}`, 'error');
     }
 };
@@ -261,19 +294,26 @@ const _selectDeploymentForRestore = async (params) => {
 
 const _confirmRestore = async (params) => {
     const { resourceId, backupFilename, backupFileId, updateStatusDisplay, menuContainer, menuTitle } = params;
-    const deployment = lastFetchedDeployments.find(d => d.id === resourceId);
-    if (!deployment) {
-        updateStatusDisplay('Could not find deployment details.', 'error');
+    
+    let machine;
+    if (resourceId === 'new_machine') {
+        machine = { id: 'new_machine', name: 'a new machine', zone: null };
+    } else {
+        machine = lastFetchedMachines.find(m => m.id === resourceId);
+    }
+    
+    if (!machine) {
+        updateStatusDisplay('Could not find machine details.', 'error');
         return;
     }
     if (!backupFilename) {
-        updateStatusDisplay('No backup file was selected.', 'error');
+        updateStatusDisplay('Backup file is missing.', 'error');
         return;
     }
 
     const confirmation = await prompt({
         id: 'confirm-restore-prompt',
-        text: `Restore ${deployment.name} from ${backupFilename}? This re-runs the setup script.`,
+        text: `Restore backup ${backupFilename} to ${machine.name}?`,
         type: 'options',
         options: [
             { label: 'yes', value: 'yes' },
@@ -287,6 +327,7 @@ const _confirmRestore = async (params) => {
     }
 
     // --- Start: Show Loading GIF & Rainbow Text ---
+    window.dispatchEvent(new CustomEvent('deploymentstatechange', { detail: { isActive: true } }));
     updateStatusDisplay('Starting restore...', 'info');
     document.body.classList.add('deployment-loading');
     updateAccountButtonVisibility(false);
@@ -310,11 +351,12 @@ const _confirmRestore = async (params) => {
     // --- End: Show Loading GIF & Rainbow Text ---
 
     try {
-        updateStatusDisplay(`initiating restore for ${deployment.name}...`, 'info');
+        updateStatusDisplay(`initiating restore...`, 'info');
         const response = await fetchWithAuth(`${API_BASE_URL}/restore`, {
             method: 'POST',
             body: { 
-                deployment: deployment.deployment,
+                vm_id: machine.id,
+                zone: machine.zone,
                 backup_file_id: backupFileId
             }
         });
@@ -364,9 +406,7 @@ async function _communicateRestore(ws, params) {
     const terminalQueue = [];
 
     const restoreBackButtonHandler = () => {
-        // Unregister the handler to hide the back button while prompting.
         unregisterBackButtonHandler();
-
         prompt({
             text: "Are you sure you want to exit this restore?",
             type: 'options',
@@ -379,13 +419,11 @@ async function _communicateRestore(ws, params) {
             if (result && result.status === 'answered' && result.value === true) {
                 _cancelActiveRestore("user_cancelled_via_prompt", "Restore cancelled by user.");
             } else {
-                // If the user selects "No" or cancels the prompt, re-register the handler to show the back button again.
                 updateBackButtonHandler(restoreBackButtonHandler);
             }
         });
     };
     
-    // Start with the confirmation handler.
     updateBackButtonHandler(restoreBackButtonHandler);
 
     ws.onmessage = async (event) => {
@@ -393,34 +431,21 @@ async function _communicateRestore(ws, params) {
             const data = JSON.parse(event.data);
             const { event: eventName, payload } = data;
 
-            if (eventName === 'UPDATE_STATUS') {
-                const messageText = payload.text || JSON.stringify(payload);
-                const level = payload.level || 'info';
-
-                if (payload.view === 'terminal') {
-                    if (!terminalLoaded && !terminalLoading) {
-                        loadAndSwitchToTerminal(messageText, level);
-                    } else if (terminalLoading) {
-                        terminalQueue.push({ text: messageText, level: level });
-                    } else if (terminalApi) {
-                        terminalApi.addOutput(messageText, level);
-                    }
-                } else {
-                    updateStatusDisplay(messageText, level);
-                }
-            } else if (eventName === 'FATAL_ERROR') {
-                const messageText = payload.message || JSON.stringify(payload);
-                updateStatusDisplay(messageText, 'error');
-                _cancelActiveRestore(`server_error: ${messageText}`);
-            } else if (eventName === 'DEPLOYMENT_COMPLETE') {
-                if (terminalApi) {
-                    const messageText = payload.finalMessage || "Restore finished.";
-                    terminalApi.addOutput(messageText, 'info');
-                    terminalApi.disableInput();
-                }
-                if (ws && ws.readyState < WebSocket.CLOSING) {
-                    ws.close();
-                }
+            switch (eventName) {
+                case 'UPDATE_STATUS':
+                    handleUpdateStatusEvent(payload);
+                    break;
+                case 'PROMPT_USER':
+                    await handlePromptUserEvent(payload);
+                    break;
+                case 'FATAL_ERROR':
+                    handleFatalErrorEvent(payload);
+                    break;
+                case 'DEPLOYMENT_COMPLETE':
+                    handleRestoreCompleteEvent(payload);
+                    break;
+                default:
+                    updateStatusDisplay(`Received unknown event: ${eventName}`, 'warning');
             }
         } catch (error) {
             console.error('Error processing WebSocket message:', error);
@@ -428,6 +453,79 @@ async function _communicateRestore(ws, params) {
             _cancelActiveRestore(`ws_message_error: ${error.message}`);
         }
     };
+
+    function handleUpdateStatusEvent(payload) {
+        const messageText = payload.text || JSON.stringify(payload);
+        const level = payload.level || 'info';
+
+        if (payload.view === 'terminal') {
+            if (!terminalLoaded && !terminalLoading) {
+                loadAndSwitchToTerminal(messageText, level);
+            } else if (terminalLoading) {
+                terminalQueue.push({ text: messageText, level: level });
+            } else if (terminalApi) {
+                terminalApi.addOutput(messageText, level);
+            }
+        } else {
+            updateStatusDisplay(messageText, level);
+        }
+    }
+    
+    async function handlePromptUserEvent(payload) {
+        if (payload.url) {
+            const { openPopup } = await import('/static/scripts/popup.js');
+            openPopup(payload.url);
+        }
+
+        try {
+            const answer = await prompt(payload);
+            ws.send(JSON.stringify({
+                status: answer.status,
+                value: answer.value
+            }));
+        } catch (error) {
+            console.error("Error handling prompt:", error);
+            _cancelActiveRestore(`prompt_error: ${error.message}`);
+        }
+    }
+
+    function handleFatalErrorEvent(payload) {
+        const messageText = payload.message || JSON.stringify(payload);
+        updateStatusDisplay(messageText, 'error');
+        _cancelActiveRestore(`server_error: ${messageText}`);
+    }
+
+    function handleRestoreCompleteEvent(payload) {
+        const promptConfig = payload.prompt || {
+            id: 'restore-complete-prompt',
+            type: 'options',
+            text: payload.finalMessage || "Restore finished.",
+            options: ['OK']
+        };
+
+        prompt(promptConfig).then(result => {
+            if (ws && ws.readyState < WebSocket.CLOSING) {
+                ws.close();
+            }
+
+            if (result && result.status === 'answered' && result.value === 'view_resource' && result.context && result.context.site_id) {
+                const siteId = result.context.site_id;
+                console.log(`Transitioning to view site: ${siteId}`);
+                
+                unregisterBackButtonHandler();
+                clearPromptStack();
+                activeRestore.ws = null;
+                activeRestore.deploymentId = null;
+                document.body.classList.remove('deployment-loading');
+
+                window.dispatchEvent(new CustomEvent('deploymentstatechange', { detail: { isActive: false } }));
+                loadConsoleView({ specialNav: 'viewSite', siteId: siteId });
+
+            } else {
+                _cancelActiveRestore("restore_complete", "Restore successful.");
+            }
+        });
+    }
 
     async function loadAndSwitchToTerminal(initialMessage, initialLevel) {
         if (terminalLoading || terminalLoaded) return;
@@ -446,7 +544,6 @@ async function _communicateRestore(ws, params) {
                 terminalLoaded = true;
             }
 
-            // Flush any messages that arrived while loading
             if (terminalApi && terminalQueue.length > 0) {
                 for (const queued of terminalQueue.splice(0)) {
                     terminalApi.addOutput(queued.text, queued.level);
@@ -462,22 +559,35 @@ async function _communicateRestore(ws, params) {
 }
 
 const _showScheduleMenu = async ({ renderMenu, updateStatusDisplay }) => {
+    window.dispatchEvent(new CustomEvent('deploymentstatechange', { detail: { isActive: true } }));
     try {
         updateStatusDisplay('fetching deployments...', 'info');
-        const deploymentsData = await fetchSites({ include_schedule: true });
+        const vms = await fetchSites({ include_schedule: true });
         let deployments = [];
         let emptyMessage = 'No deployments found.';
 
-        if (Array.isArray(deploymentsData)) {
-            if (deploymentsData.length === 1 && deploymentsData[0].id === 'no-deployments') {
-                emptyMessage = deploymentsData[0].name;
+        if (Array.isArray(vms)) {
+            if (vms.length === 1 && vms[0].id === 'no-deployments') {
+                emptyMessage = vms[0].name;
             } else {
-                deployments = deploymentsData.filter(item => item.id !== 'no-deployments');
+                vms.forEach(vm => {
+                    if (vm.deployments && vm.deployments.length > 0) {
+                        const deploymentsOnVm = vm.deployments.map(dep => ({
+                            id: `${vm.id}-${dep.deployment_name}`,
+                            name: dep.deployment_name,
+                            deployment: dep.deployment_name,
+                            vm_name: vm.name,
+                            project_id: vm.project_id,
+                            backup_schedule: dep.backup_schedule || 'not set'
+                        }));
+                        deployments.push(...deploymentsOnVm);
+                    }
+                });
             }
-        } else if (deploymentsData && deploymentsData.id === 'no-deployments') {
-            // It's the "no deployments" object, let the empty array handle it.
+        } else if (vms && vms.id === 'no-deployments') {
+            emptyMessage = vms.name;
         } else {
-            console.warn("API response for /instances was not an array:", deploymentsData);
+            console.warn("API response for /instances was not an array:", vms);
         }
 
         lastFetchedDeployments = deployments;
@@ -495,9 +605,10 @@ const _showScheduleMenu = async ({ renderMenu, updateStatusDisplay }) => {
 
         const menuItems = deployments.map(deployment => ({
             id: `schedule-backup-${deployment.id}`,
-            text: `${deployment.name} - ${deployment.backup_schedule || 'not set'}`,
+            text: `${deployment.name} on ${deployment.vm_name} - ${deployment.backup_schedule || 'not set'}`,
             type: 'record',
             action: 'promptBackupSchedule',
+            showLoading: true, // Add this
             resourceId: deployment.id
         }));
 
@@ -516,7 +627,7 @@ const _showScheduleMenu = async ({ renderMenu, updateStatusDisplay }) => {
     }
 };
 
-const _promptBackupSchedule = async ({ resourceId, updateStatusDisplay }) => {
+const _promptBackupSchedule = async ({ resourceId, updateStatusDisplay, renderMenu, menuContainer, menuTitle }) => {
     const deployment = lastFetchedDeployments.find(d => d.id === resourceId);
     if (!deployment) {
         updateStatusDisplay('Could not find deployment details. Please try again.', 'error');
@@ -532,7 +643,7 @@ const _promptBackupSchedule = async ({ resourceId, updateStatusDisplay }) => {
                 id: 'interval',
                 label: 'Backup Frequency',
                 options: [
-                    { label: 'Never', value: 'never' },
+                    { label: 'Manual', value: 'manual' },
                     { label: 'Daily', value: 'daily' },
                     { label: 'Weekly', value: 'weekly' },
                     { label: 'Monthly', value: 'monthly' },
@@ -546,17 +657,45 @@ const _promptBackupSchedule = async ({ resourceId, updateStatusDisplay }) => {
     });
 
     if (result.status === 'answered' && result.value) {
+        // --- Start: Show Loading GIF & Rainbow Text ---
+        window.dispatchEvent(new CustomEvent('deploymentstatechange', { detail: { isActive: true } }));
+        updateStatusDisplay('Updating schedule...', 'info');
+        document.body.classList.add('deployment-loading');
+
+        if (menuContainer) {
+            const listContainer = menuContainer.querySelector('#menu-list-container');
+            if (listContainer) {
+                listContainer.innerHTML = ''; // Clear the menu buttons
+                const loadingGif = document.createElement('img');
+                loadingGif.src = '/static/resources/happy-cat.gif';
+                loadingGif.alt = 'Loading...';
+                loadingGif.className = 'loading-gif';
+                listContainer.appendChild(loadingGif);
+            }
+            if (menuTitle) {
+                menuTitle.textContent = 'scheduling';
+                menuTitle.classList.add('rainbow-text');
+            }
+        }
+        // --- End: Show Loading GIF & Rainbow Text ---
+
         await _setBackupSchedule({
             deployment,
             interval: result.value.interval,
-            updateStatusDisplay
+            updateStatusDisplay,
+            renderMenu // Pass renderMenu to the next function
         });
+    } else {
+        // User cancelled the prompt, return to the main backup menu.
+        // The onRender handler for 'backup-menu' will reset the deployment state.
+        renderMenu('backup-menu');
     }
 };
 
-const _setBackupSchedule = async ({ deployment, interval, updateStatusDisplay }) => {
+const _setBackupSchedule = async ({ deployment, interval, updateStatusDisplay, renderMenu }) => {
     try {
-        updateStatusDisplay(`setting backup schedule for ${deployment.name}...`, 'info');
+        // This is already being set by the loading UI in the calling function.
+        // updateStatusDisplay(`setting backup schedule for ${deployment.name}...`, 'info');
         const schedulePayload = {
             deployment: deployment.deployment,
             project_id: deployment.project_id,
@@ -578,6 +717,11 @@ const _setBackupSchedule = async ({ deployment, interval, updateStatusDisplay })
     } catch (error) {
         console.error("Error setting backup schedule:", error);
         updateStatusDisplay(`Error: ${error.message}`, 'error');
+    } finally {
+        // Clean up loading UI and refresh the schedule list menu.
+        document.body.classList.remove('deployment-loading');
+        // The deploymentstatechange flag remains true, navigation back will clear it.
+        await _showScheduleMenu({ renderMenu, updateStatusDisplay });
     }
 };
 
@@ -599,8 +743,8 @@ export const showRestoreMenu = requireAuthAndSubscription(
     "restore from backup"
 );
 
-export const selectDeploymentForRestore = requireAuthAndSubscription(
-    _selectDeploymentForRestore,
+export const selectMachineForRestore = requireAuthAndSubscription(
+    _selectMachineForRestore,
     "restore from backup"
 );
 
@@ -628,24 +772,9 @@ const backupMenuConfig = {
         { id: 'restore-backup-option', text: 'restore', action: 'showRestoreMenu', type: 'button', showLoading: true },
         { id: 'schedule-backup-option', text: 'schedule', action: 'showScheduleMenu', type: 'button', showLoading: true }
     ],
-    backTarget: 'resource-menu'
+    backTarget: 'resource-menu',
+    onRender: () => {
+        window.dispatchEvent(new CustomEvent('deploymentstatechange', { detail: { isActive: false } }));
+    }
 };
 menus['backup-menu'] = backupMenuConfig;
-
-const restoreBackupMenuConfig = {
-    text: 'restore from backup:',
-    items: [
-        { text: 'feature not implemented', type: 'record' }
-    ],
-    backTarget: 'backup-menu'
-};
-menus['restore-backup-menu'] = restoreBackupMenuConfig;
-
-const scheduleBackupMenuConfig = {
-    text: 'schedule backups:',
-    items: [
-        { text: 'feature not implemented', type: 'record' }
-    ],
-    backTarget: 'backup-menu'
-};
-menus['schedule-backup-menu'] = scheduleBackupMenuConfig; 

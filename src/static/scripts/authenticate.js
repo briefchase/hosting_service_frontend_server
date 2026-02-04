@@ -255,7 +255,7 @@ export function initializeGoogleSignIn(statusContainer) {
  */
 export function triggerGoogleSignIn(statusContainer) {
     if (codeClient) {
-        updateAuthStatus(statusContainer, ''); // Clear previous status/error messages
+        // updateAuthStatus(statusContainer, ''); // This was too aggressive, clearing the "please sign in" message.
         console.log('Requesting authorization code...');
         console.log('[DEBUG] Attempting to call codeClient.requestCode()');
         codeClient.requestCode();
@@ -294,12 +294,28 @@ export function getUser() {
 export function requireAuthAndSubscription(actionFn, actionName, options = {}) {
     const { skipSubscriptionCheck } = options || {};
 
+    // DRY helper for triggering a re-authentication flow. It is self-contained.
+    const _initiateReauth = (guardedFn, params) => {
+        const { updateStatusDisplay } = params || {};
+        
+        // Use a consistent message for both initial sign-in and re-auth.
+        const message = 'please sign in to continue';
+        if (updateStatusDisplay) {
+            updateStatusDisplay(message, 'info');
+        }
+
+        // Store the original action for re-execution after successful auth (only if not already set)
+        if (typeof window !== 'undefined' && !window.pendingReauthAction) {
+            window.pendingReauthAction = { actionFn: guardedFn, params };
+        }
+    };
+
     const guarded = async function(params) {
         // Destructure all required functions and elements from params
         let { menuContainer, renderMenu, updateStatusDisplay, skipSubscription } = params || {};
 
         if (!updateStatusDisplay) {
-            // Fallback for when no UI status updater is provided (e.g., on the landing page).
+            // Fallback for when no UI status updater is provided.
             updateStatusDisplay = (message, type = 'info') => {
                 console[type === 'error' ? 'error' : 'log'](`[Auth Guard] ${message}`);
             };
@@ -309,100 +325,63 @@ export function requireAuthAndSubscription(actionFn, actionName, options = {}) {
 
         // 1. Authentication Check
         if (!user) {
-            updateStatusDisplay(`please sign in to ${actionName}`, 'info');
-            // Store the original action for re-execution after successful auth (only if not already set)
-            if (typeof window !== 'undefined' && !window.pendingReauthAction) {
-                // Re-run the guarded wrapper after auth, not the inner actionFn
-                window.pendingReauthAction = { actionFn: guarded, params };
-            }
+            _initiateReauth(guarded, params);
             
-            // The success callback is now handled internally by the new central handler.
-            // We no longer need to import anything from main.js or define a custom callback here.
-
-            // Robustly find a status container.
-            // If on landing, use null to log to console. Otherwise, find a UI element.
             const isLandingPage = !!document.getElementById('landing-view-container');
-            let statusContainer;
-            if (isLandingPage) {
-                statusContainer = null;
-            } else if (menuContainer) {
-                statusContainer = menuContainer.querySelector('#menu-status-message') || menuContainer;
-            } else {
-                statusContainer = document.getElementById('prompt-container') || document.body;
-            }
+            let statusContainer = isLandingPage ? null : (menuContainer?.querySelector('#menu-status-message') || menuContainer || document.getElementById('prompt-container') || document.body);
 
             initializeGoogleSignIn(statusContainer);
             triggerGoogleSignIn(statusContainer);
             return;
         }
 
-        // 2. Subscription Check (conditional)
-        if (!skipSubscription && !skipSubscriptionCheck) {
-            try {
+        try {
+            // 2. Subscription Check (conditional)
+            if (!skipSubscription && !skipSubscriptionCheck) {
                 updateStatusDisplay("checking subscription...", "info");
                 const response = await fetchWithAuth(`${API_BASE_URL}/subscription-status`);
                 if (!response.ok) {
-                    const errorData = await response.json().catch(() => ({})); // try to get error details
+                    const errorData = await response.json().catch(() => ({}));
                     throw new Error(`failed to fetch subscription status: ${errorData.error || response.statusText}`);
                 }
                 const subscriptionData = await response.json();
                 if (subscriptionData.status !== 'active') {
                     updateStatusDisplay(`active subscription required to ${actionName}.`, 'info');
-                    
                     const { initializeStripe, handleSubscribe } = await import('/static/menus/subscription.js');
                     const { updateBackButtonHandler, unregisterBackButtonHandler } = await import('/static/main.js');
                     const { cancelCurrentPrompt } = await import('/static/pages/prompt.js');
-                    const backHandler = () => {
-                        cancelCurrentPrompt();
-                    };
+                    const backHandler = () => cancelCurrentPrompt();
                     updateBackButtonHandler(backHandler);
                     try {
                         await initializeStripe();
-                        await handleSubscribe(); // This shows the embedded checkout prompt
+                        await handleSubscribe();
                     } finally {
                         unregisterBackButtonHandler();
                     }
-                    
-                    return; // Stop execution
-                }
-            } catch (error) {
-                console.error(`Error during subscription check for ${actionName}:`, error);
-                if (error && error.message === 'ReauthInitiated') {
-                    // Store the original action for re-execution after successful reauth (only if not already set)
-                    if (typeof window !== 'undefined' && !window.pendingReauthAction) {
-                        window.pendingReauthAction = { actionFn: guarded, params };
-                    }
-                    // Suppress user-facing error and wait for re-execution.
                     return;
                 }
-                updateStatusDisplay(`unable to verify subscription: ${error.message}`, "error");
-                // Optionally, render an error menu
-                if (renderMenu) {
-                    renderMenu({
-                        id: 'auth-error-menu',
-                        text: 'error',
-                        items: [{ text: `could not verify subscription.`, type: 'record' }, {text: 'please try again later.', type: 'record'}],
-                        backTarget: 'dashboard-menu'
-                    });
-                }
-                return; // Stop execution on subscription check failure
             }
-        }
 
-        // 4. All checks passed, execute the original action
-        try {
+            // 4. All checks passed, execute the original action
             await actionFn(params);
+
         } catch (error) {
-            // This final catch handles cases where the actionFn itself triggers a 401 error.
+            console.error(`Error during guarded action for ${actionName}:`, error);
             if (error && error.message === 'ReauthInitiated') {
-                if (typeof window !== 'undefined' && !window.pendingReauthAction) {
-                    window.pendingReauthAction = { actionFn: guarded, params };
-                }
-                // Suppress further errors as re-auth is in progress.
+                _initiateReauth(guarded, params);
                 return;
             }
-            // Re-throw other errors so they can be handled by the caller.
-            throw error;
+            
+            updateStatusDisplay(`unable to verify subscription: ${error.message}`, "error");
+            if (renderMenu) {
+                renderMenu({
+                    id: 'auth-error-menu',
+                    text: 'error',
+                    items: [{ text: `could not verify subscription.`, type: 'record' }, {text: 'please try again later.', type: 'record'}],
+                    backTarget: 'dashboard-menu'
+                });
+            }
+            return;
         }
     };
     return guarded;

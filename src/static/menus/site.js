@@ -40,6 +40,7 @@ function generateSiteDetailsMenu(site) {
 
     let detailItems = [
         { id: `details-machine-name-${site.id}`, text: `Machine: ${site.machine_name || 'Unknown'}`, type: 'record' },
+        { id: `details-status-${site.id}`, text: `Status: ${site.status || 'Unknown'}`, type: 'record' },
         { id: `details-schedule-${site.id}`, text: `Backups: ${site.backup_schedule || 'manual'}`, type: 'record' },
         addressItem,
     ];
@@ -84,7 +85,7 @@ async function fetchAndProcessDeployments() {
                     deployment: dep.deployment_name,
                     project_id: vm.id,
                         machine_name: vm.name,
-                        status: vm.status,
+                        status: dep.status,
                         ip_address: vm.ip_address,
                         domain: dep.domain,
                         port: dep.port,

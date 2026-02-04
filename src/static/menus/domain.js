@@ -3,7 +3,15 @@ import { menus, renderMenu, updateStatusDisplay } from '/static/pages/menu.js';
 import { API_BASE_URL, fetchWithAuth, updateBackButtonHandler, unregisterBackButtonHandler } from '/static/main.js';
 import { requireAuthAndSubscription } from '/static/scripts/authenticate.js';
 import { prompt, cancelCurrentPrompt } from '/static/pages/prompt.js';
-import { fetchDomains } from '/static/scripts/utilities.js';
+import { fetchSites } from '/static/scripts/utilities.js';
+
+async function fetchDomains() {
+    const response = await fetchWithAuth(`${API_BASE_URL}/domains`);
+    if (!response.ok) {
+        throw new Error(`Failed to fetch domains: ${response.statusText}`);
+    }
+    return response.json();
+}
 
 async function handleRegisterNewDomain(params) {
     const { resourceId: projectId, renderMenu } = params;
@@ -49,31 +57,96 @@ async function _listDomainsLogic(params) {
     const { renderMenu, updateStatusDisplay } = params;
     try {
         updateStatusDisplay('fetching domains...', 'info');
-        const data = await fetchDomains();
+        const [domainData, sitesData] = await Promise.all([
+            fetchDomains(),
+            fetchSites()
+        ]);
         
-        // Handle the "no deployments" message from the backend
-        if (data.message) {
+        const allDeployments = [];
+        if (Array.isArray(sitesData)) {
+            sitesData.forEach(vm => {
+                if (vm.deployments && vm.deployments.length > 0) {
+                    allDeployments.push(...vm.deployments.map(dep => ({
+                        ...dep,
+                        machine_name: vm.name,
+                        deployment_name: dep.deployment_name // Ensure this is present
+                    })));
+                }
+            });
+        }
+        
+        if (domainData.message && allDeployments.length === 0) {
             renderMenu({
                 id: 'domain-menu',
                 text: 'domains:',
-                items: [{ text: data.message, type: 'record' }],
+                items: [{ text: domainData.message, type: 'record' }],
                 backTarget: 'resource-menu'
             });
             return;
         }
 
-        const domainItems = (data.domains || []).map(d => ({
-            text: d.domainName,
-            type: 'button' // Changed back to 'button'
-        }));
+        const gcpDomainNames = new Set((domainData.domains || []).map(d => d.domainName));
+        const allDomainObjects = (domainData.domains || []).map(d => ({ ...d, isGcpManaged: true }));
 
-        if (data.projectId) {
+        // Find and add externally managed domains that are linked to deployments
+        allDeployments.forEach(dep => {
+            if (dep.domain && !gcpDomainNames.has(dep.domain)) {
+                allDomainObjects.push({
+                    domainName: dep.domain,
+                    isGcpManaged: false,
+                });
+                gcpDomainNames.add(dep.domain); // Add to set to prevent duplicates
+            }
+        });
+
+        const domainItems = allDomainObjects.map(d => {
+            const linkedDeployment = allDeployments.find(dep => dep.domain === d.domainName);
+            const menuId = `domain-details-${d.domainName.replace(/\./g, '-')}`;
+            
+            const detailItems = [
+                {
+                    text: `site: ${linkedDeployment ? linkedDeployment.deployment_name : 'unlinked'}`,
+                    type: 'record'
+                }
+            ];
+
+            if (d.isGcpManaged) {
+                detailItems.push({
+                    id: `relink-${d.domainName.replace(/\./g, '-')}`,
+                    text: 'relink',
+                    type: 'button',
+                    action: 'relinkDomain',
+                    domainName: d.domainName
+                });
+            } else {
+                detailItems.push({
+                    text: 'managed externally',
+                    type: 'record'
+                });
+            }
+
+            menus[menuId] = {
+                id: menuId,
+                text: d.domainName,
+                items: detailItems,
+                backTarget: 'domain-menu'
+            };
+
+            return {
+                id: `domain-${d.domainName.replace(/\./g, '-')}`,
+            text: d.domainName,
+                type: 'button',
+                targetMenu: menuId
+            };
+        });
+
+        if (domainData.projectId) {
             domainItems.push({
                 id: 'register-new-domain',
                 text: 'new',
-                type: 'button', // Changed back to 'button'
+                type: 'button',
                 action: 'registerDomain',
-                resourceId: data.projectId
+                resourceId: domainData.projectId
             });
         }
 
@@ -95,6 +168,10 @@ async function _listDomainsLogic(params) {
     }
 }
 
-export const listDomains = requireAuthAndSubscription(_listDomainsLogic, 'view domains');
+async function _relinkDomainLogic(params) {
+    updateStatusDisplay('Relinking domains is not yet implemented.', 'info');
+}
 
+export const listDomains = requireAuthAndSubscription(_listDomainsLogic, 'view domains');
+export const relinkDomain = requireAuthAndSubscription(_relinkDomainLogic, 'relink domain');
 export { handleRegisterNewDomain }; 

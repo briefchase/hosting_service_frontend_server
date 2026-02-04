@@ -374,6 +374,18 @@ body.prompt-overlay-active #console-container {
     color: white; /* Brighten on hover */
 }
 
+.social-icon {
+    height: calc(1em + 5px); /* Match icon size to text, but slightly larger */
+    width: auto;
+    vertical-align: middle; /* Align icon nicely with the text */
+    filter: invert(75%) sepia(0%) saturate(7543%) hue-rotate(235deg) brightness(89%) contrast(91%); /* This approximates #aaa */
+    transition: filter 0.3s;
+}
+
+.legal-links a:hover .social-icon {
+    filter: invert(100%) sepia(100%) saturate(0%) hue-rotate(288deg) brightness(102%) contrast(102%); /* This produces pure white */
+}
+
 
 /* Global Corner Buttons */
 .back-button,
