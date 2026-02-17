@@ -1,9 +1,17 @@
 // Import the central menu registry and API base URL
 import { menus, renderMenu, updateStatusDisplay } from '/static/pages/menu.js';
-import { API_BASE_URL, fetchWithAuth, updateBackButtonHandler, unregisterBackButtonHandler } from '/static/main.js';
+import { 
+    API_BASE_URL, 
+    fetchWithAuth, 
+    updateBackButtonHandler, 
+    unregisterBackButtonHandler,
+    updateAccountButtonVisibility,
+    updateSiteTitleVisibility 
+} from '/static/main.js';
 import { requireAuthAndSubscription } from '/static/scripts/authenticate.js';
 import { prompt, cancelCurrentPrompt } from '/static/pages/prompt.js';
 import { fetchSites } from '/static/scripts/utilities.js';
+import { relinkDomain as relinkDomainApi } from '/static/scripts/domains.js';
 
 async function fetchDomains() {
     const response = await fetchWithAuth(`${API_BASE_URL}/domains`);
@@ -100,29 +108,42 @@ async function _listDomainsLogic(params) {
         });
 
         const domainItems = allDomainObjects.map(d => {
-            const linkedDeployment = allDeployments.find(dep => dep.domain === d.domainName);
             const menuId = `domain-details-${d.domainName.replace(/\./g, '-')}`;
             
-            const detailItems = [
-                {
-                    text: `site: ${linkedDeployment ? linkedDeployment.deployment_name : 'unlinked'}`,
-                    type: 'record'
-                }
-            ];
+            const detailItems = [];
 
-            if (d.isGcpManaged) {
+            // NEW: Check for relinking status directly on the domain object.
+            if (d.relinking_status) {
+                const targetName = d.relinking_status.target_deployment;
                 detailItems.push({
-                    id: `relink-${d.domainName.replace(/\./g, '-')}`,
-                    text: 'relink',
-                    type: 'button',
-                    action: 'relinkDomain',
-                    domainName: d.domainName
+                    text: `linking to ${targetName}...`,
+                    type: 'record'
                 });
             } else {
+                // Original logic when not relinking.
+                const linkedDeployment = allDeployments.find(dep => dep.domain === d.domainName);
                 detailItems.push({
-                    text: 'managed externally',
-                    type: 'record'
+                    text: `site: ${linkedDeployment ? linkedDeployment.deployment_name : 'unlinked'}`,
+                    type: 'record',
+                    className: 'details-last-record'
                 });
+
+                if (d.isGcpManaged) {
+                    detailItems.push({
+                        id: `relink-${d.domainName.replace(/\./g, '-')}`,
+                        text: linkedDeployment ? 'relink' : 'link',
+                        type: 'button',
+                        action: 'relinkDomain',
+                        domainName: d.domainName,
+                        showLoading: true
+                    });
+                } else {
+                    detailItems.push({
+                        text: 'managed externally',
+                        type: 'record',
+                        className: 'details-last-record'
+                    });
+                }
             }
 
             menus[menuId] = {
@@ -143,7 +164,7 @@ async function _listDomainsLogic(params) {
         if (domainData.projectId) {
             domainItems.push({
                 id: 'register-new-domain',
-                text: 'new',
+                text: 'new domain',
                 type: 'button',
                 action: 'registerDomain',
                 resourceId: domainData.projectId
@@ -169,7 +190,87 @@ async function _listDomainsLogic(params) {
 }
 
 async function _relinkDomainLogic(params) {
-    updateStatusDisplay('Relinking domains is not yet implemented.', 'info');
+    const { domainName, renderMenu, updateStatusDisplay } = params;
+
+    try {
+        // 1. Fetch all deployments to present as choices
+        updateStatusDisplay('fetching available deployments...', 'info');
+        const sitesData = await fetchSites();
+        if (!sitesData || sitesData.length === 0 || (sitesData.length === 1 && sitesData[0].id === 'no-deployments')) {
+            updateStatusDisplay('No deployments available to link to.', 'error');
+            return;
+        }
+
+        const allDeploymentsRaw = [];
+        sitesData.forEach(vm => {
+            if (vm.deployments && vm.deployments.length > 0) {
+                allDeploymentsRaw.push(...vm.deployments.map(dep => ({
+                    ...dep, // Includes 'domain' property if it exists
+                    machine_name: vm.name,
+                    machine_id: vm.id // Ensure we have the ID
+                })));
+            }
+        });
+
+        // Find the deployment this domain is currently linked to
+        const currentDeployment = allDeploymentsRaw.find(dep => dep.domain === domainName);
+
+        // Filter out the current deployment from the list of options
+        const availableDeployments = allDeploymentsRaw.filter(dep => {
+            if (!currentDeployment) return true; // If not linked, all are available
+            return dep.deployment_name !== currentDeployment.deployment_name || dep.machine_id !== currentDeployment.machine_id;
+        });
+
+        if (availableDeployments.length === 0) {
+            updateStatusDisplay('No other deployments available to link to.', 'info');
+            // Immediately go back to the domain details menu.
+            setTimeout(() => listDomains(params), 1500);
+            return;
+        }
+
+        const deploymentOptions = availableDeployments.map(dep => ({
+            value: {
+                deployment_name: dep.deployment_name,
+                machine_id: dep.machine_id,
+                machine_name: dep.machine_name // Keep for display label
+            },
+            label: `${dep.deployment_name} on ${dep.machine_name}`
+        }));
+
+        // 2. Prompt user to select a deployment
+        const answer = await prompt({
+            id: 'relink-deployment-select',
+            text: `Which deployment should ${domainName} point to?`,
+            type: 'options',
+            options: deploymentOptions
+        });
+
+        if (!answer || answer.status !== 'answered' || !answer.value) {
+            updateStatusDisplay('Relink cancelled.', 'info');
+            // On cancellation, just refresh the domain list to go back.
+            listDomains(params);
+            return;
+        }
+
+        const { deployment_name, machine_id } = answer.value;
+
+        // 3. Call the API
+        updateStatusDisplay(`Initiating relink for ${domainName}...`, 'info');
+        const result = await relinkDomainApi({ domainName, deployment_name, machine_id });
+
+        if (result.ok) {
+            updateStatusDisplay('Relink initiated successfully!', 'success');
+        } else {
+            throw new Error(result.error || 'Failed to initiate relink.');
+        }
+
+    } catch (error) {
+        updateStatusDisplay(`Error: ${error.message}`, 'error');
+    } finally {
+        // 4. ALWAYS refresh the domain list immediately to show the new state.
+        // This will either show the "linking to..." status or revert on error.
+        listDomains(params);
+    }
 }
 
 export const listDomains = requireAuthAndSubscription(_listDomainsLogic, 'view domains');

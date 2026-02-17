@@ -60,7 +60,8 @@ function generateMachineDetailsMenu(vm) {
     detailItems.push({ 
         id: `connect-vm-${vm.id}`, 
         text: '<s>connect</s>', 
-        type: 'button', 
+        type: 'button',
+        tooltip: 'coming soon',
         resourceId: vm.id 
     });
     detailItems.push({ 
@@ -158,7 +159,7 @@ export const destroyMachine = requireAuthAndSubscription(async (params) => {
         updateStatusDisplay('Initiating destruction...', 'info');
         const response = await fetchWithAuth(`${API_BASE_URL}/destroy`, {
             method: 'POST',
-            body: { vm_name: resourceId }
+            body: { vm_id: resourceId }
         });
 
         const result = await response.json();

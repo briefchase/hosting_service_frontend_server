@@ -521,6 +521,15 @@ body.prompt-overlay-active #console-container {
     color: #aaa; /* Keep records slightly dimmed */
 }
 
+.menu-horizontal-list li.label-record {
+    padding-right: 0;
+}
+
+/* Add extra space after the last record in details menus */
+.menu li.details-last-record {
+    margin-bottom: 15px !important; /* Use important to ensure override */
+}
+
 /* Hover effect for Buttons and Records */
 .menu li.menu-button:hover,
 .menu li.menu-record:hover {

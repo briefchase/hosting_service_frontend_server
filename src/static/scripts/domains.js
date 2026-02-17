@@ -76,3 +76,29 @@ export async function checkDomainAvailability({ domainName, token }) {
 }
 
 
+export async function relinkDomain({ domainName, deployment_name, machine_id }) {
+    try {
+        const response = await fetchWithAuth(`${API_BASE_URL}/relink-domain`, {
+            method: 'POST',
+            body: {
+                domainName,
+                deployment_name,
+                machine_id
+            }
+        });
+
+        const body = await response.json().catch(() => ({}));
+
+        if (response.ok) {
+            return { ok: true, result: body };
+        }
+
+        return {
+            ok: false,
+            status: response.status,
+            error: body.error || `Server returned ${response.status}`
+        };
+    } catch (error) {
+        return { ok: false, status: 0, error: error.message };
+    }
+}

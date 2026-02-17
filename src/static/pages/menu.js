@@ -191,21 +191,9 @@ export async function renderMenu(menuIdOrConfig) {
 
     if (typeof menuIdOrConfig === 'string') {
         menuId = menuIdOrConfig;
-        // Check if the menu config is a promise (like from buildResourcesMenu)
-        const configOrPromise = menus[menuId];
-        if (typeof configOrPromise.then === 'function') {
-            try {
-                // If it's a promise, wait for it to resolve
-                menuConfig = await configOrPromise;
-                // Since the promise is now resolved, replace it with the actual config
-                // to avoid re-fetching unless the page is reloaded.
-                menus[menuId] = menuConfig;
-            } catch (error) {
-                console.error(`Error resolving menu promise for "${menuId}":`, error);
-                menuContainerElement.innerHTML = '<p>Error loading menu.</p>';
-                return;
-            }
-        } else if (typeof configOrPromise === 'function') { // It's a generator function
+        // Check if the menu config is a function that returns a promise
+        const configOrFunction = menus[menuId];
+        if (typeof configOrFunction === 'function') { // It's a generator function
             // Render a loading state immediately, and then fetch the real menu
             // in the background.
             const loadingConfig = {
@@ -216,7 +204,7 @@ export async function renderMenu(menuIdOrConfig) {
             };
 
             // Don't await. Let it run in the background.
-            configOrPromise()
+            configOrFunction()
                 .then(resolvedConfig => {
                     // Cache the resolved config, replacing the function
                     menus[menuId] = resolvedConfig;
@@ -245,8 +233,20 @@ export async function renderMenu(menuIdOrConfig) {
             
             // Use the temporary loading config for the initial render
             menuConfig = loadingConfig;
+        } else if (configOrFunction && typeof configOrFunction.then === 'function') { // It's a direct promise
+            try {
+                // If it's a promise, wait for it to resolve
+                menuConfig = await configOrFunction;
+                // Since the promise is now resolved, replace it with the actual config
+                // to avoid re-fetching unless the page is reloaded.
+                menus[menuId] = menuConfig;
+            } catch (error) {
+                console.error(`Error resolving menu promise for "${menuId}":`, error);
+                menuContainerElement.innerHTML = '<p>Error loading menu.</p>';
+                return;
+            }
         } else {
-            menuConfig = configOrPromise;
+            menuConfig = configOrFunction;
         }
     } else if (typeof menuIdOrConfig === 'object' && menuIdOrConfig !== null) {
         // This is a dynamically generated config object (e.g., from domain.js)
@@ -583,8 +583,10 @@ export function refreshHeaderButtonsForCurrentMenu() {
             }
         }
 
+        const isLoading = menuContainerElement && menuContainerElement.dataset.loading === 'true';
+
         // Centralized account button logic
-        if (currentMenuId === 'account-menu') {
+        if (currentMenuId === 'account-menu' || isLoading) {
             updateAccountButtonVisibility(false);
         } else {
             updateAccountButtonVisibility(true, isAuthenticated);

@@ -126,6 +126,7 @@ const _listDeploymentsForBackup = async ({ renderMenu, updateStatusDisplay }) =>
             text: `${deployment.name} on ${deployment.vm_name}`,
             type: 'record',
             action: 'createScriptBackup',
+            showLoading: true,
             resourceId: deployment.id
         }));
 
@@ -136,6 +137,7 @@ const _listDeploymentsForBackup = async ({ renderMenu, updateStatusDisplay }) =>
             backTarget: 'backup-menu'
         };
 
+        menus[deploymentsMenu.id] = deploymentsMenu;
         renderMenu(deploymentsMenu);
 
     } catch (error) {
@@ -150,6 +152,8 @@ const _createScriptBackup = async ({ resourceId, renderMenu, updateStatusDisplay
         const errorMsg = `Could not find deployment with ID: ${resourceId}`;
         console.error(errorMsg);
         updateStatusDisplay(errorMsg, 'error');
+        // If we can't find deployment, just go back to the list.
+        await _listDeploymentsForBackup({ renderMenu, updateStatusDisplay });
         return;
     }
 
@@ -176,6 +180,9 @@ const _createScriptBackup = async ({ resourceId, renderMenu, updateStatusDisplay
     } catch (error) {
         console.error("Error creating backup:", error);
         updateStatusDisplay(`Error: ${error.message}`, 'error');
+    } finally {
+        // After attempting backup, refresh the list of deployments.
+        await _listDeploymentsForBackup({ renderMenu, updateStatusDisplay });
     }
 };
 
@@ -210,12 +217,14 @@ const _showRestoreMenu = async ({ renderMenu, updateStatusDisplay }) => {
             backupFileId: backup.id      // Pass the file ID for backend operations
         }));
         
-        renderMenu({
+        const menuConfig = {
             id: 'select-backup-for-restore',
             text: 'select a backup to restore:',
             items: menuItems,
             backTarget: 'backup-menu'
-        });
+        };
+        menus[menuConfig.id] = menuConfig;
+        renderMenu(menuConfig);
 
     } catch (error) {
         console.error("Error listing backups for restore:", error);
@@ -278,12 +287,14 @@ const _selectMachineForRestore = async (params) => {
             return;
         }
 
-        renderMenu({
+        const menuConfig = {
             id: 'select-machine-for-restore',
             text: `restore ${backupFilename.substring(0, 20)}... to:`,
             items: menuItems,
             backTarget: 'backup-menu'
-        });
+        };
+        menus[menuConfig.id] = menuConfig;
+        renderMenu(menuConfig);
 
     } catch (error) {
         console.error("Error listing machines for restore:", error);
@@ -522,7 +533,23 @@ async function _communicateRestore(ws, params) {
                 loadConsoleView({ specialNav: 'viewSite', siteId: siteId });
 
             } else {
-                _cancelActiveRestore("restore_complete", "Restore successful.");
+                // User clicked OK. Leave them in the terminal.
+                clearPromptStack();
+                
+                // Set a simple back button to return to the menu.
+                updateBackButtonHandler(() => returnFromTerminal({ menuId: 'backup-menu' }));
+
+                // Re-enable terminal input to signal completion.
+                if (terminalApi) {
+                    terminalApi.enableInput();
+                    terminalApi.addOutput("Restore complete. Press back to return to the menu.", "success");
+                }
+
+                // Mark restore as no longer active.
+                activeRestore.ws = null;
+                activeRestore.deploymentId = null;
+                window.dispatchEvent(new CustomEvent('deploymentstatechange', { detail: { isActive: false } }));
+                document.body.classList.remove('deployment-loading');
             }
         });
     }
@@ -618,7 +645,8 @@ const _showScheduleMenu = async ({ renderMenu, updateStatusDisplay }) => {
             items: menuItems,
             backTarget: 'backup-menu'
         };
-
+        
+        menus[deploymentsMenu.id] = deploymentsMenu;
         renderMenu(deploymentsMenu);
 
     } catch (error) {
@@ -641,7 +669,6 @@ const _promptBackupSchedule = async ({ resourceId, updateStatusDisplay, renderMe
             {
                 type: 'select',
                 id: 'interval',
-                label: 'Backup Frequency',
                 options: [
                     { label: 'Manual', value: 'manual' },
                     { label: 'Daily', value: 'daily' },
@@ -657,38 +684,15 @@ const _promptBackupSchedule = async ({ resourceId, updateStatusDisplay, renderMe
     });
 
     if (result.status === 'answered' && result.value) {
-        // --- Start: Show Loading GIF & Rainbow Text ---
-        window.dispatchEvent(new CustomEvent('deploymentstatechange', { detail: { isActive: true } }));
-        updateStatusDisplay('Updating schedule...', 'info');
-        document.body.classList.add('deployment-loading');
-
-        if (menuContainer) {
-            const listContainer = menuContainer.querySelector('#menu-list-container');
-            if (listContainer) {
-                listContainer.innerHTML = ''; // Clear the menu buttons
-                const loadingGif = document.createElement('img');
-                loadingGif.src = '/static/resources/happy-cat.gif';
-                loadingGif.alt = 'Loading...';
-                loadingGif.className = 'loading-gif';
-                listContainer.appendChild(loadingGif);
-            }
-            if (menuTitle) {
-                menuTitle.textContent = 'scheduling';
-                menuTitle.classList.add('rainbow-text');
-            }
-        }
-        // --- End: Show Loading GIF & Rainbow Text ---
-
         await _setBackupSchedule({
             deployment,
             interval: result.value.interval,
             updateStatusDisplay,
-            renderMenu // Pass renderMenu to the next function
+            renderMenu
         });
     } else {
-        // User cancelled the prompt, return to the main backup menu.
-        // The onRender handler for 'backup-menu' will reset the deployment state.
-        renderMenu('backup-menu');
+        // User cancelled the prompt, return to the schedule list.
+        await _showScheduleMenu({ renderMenu, updateStatusDisplay });
     }
 };
 

@@ -5,30 +5,54 @@ import { requireAuthAndSubscription } from '/static/scripts/authenticate.js';
 import { openPopup } from '/static/scripts/popup.js';
 
 async function _getUsageLogic(params) {
-    const { renderMenu } = params;
-    
-    renderMenu({
-        id: 'usage-menu',
-        text: 'loading...',
-        items: [{ text: 'fetching usage data...', type: 'record' }],
-        backTarget: 'dashboard-menu'
-    });
+    const { renderMenu, updateStatusDisplay, menuContainer, menuTitle } = params;
+
+    // --- Start: Show Loading GIF & Rainbow Text ---
+    window.dispatchEvent(new CustomEvent('deploymentstatechange', { detail: { isActive: true } }));
+    updateStatusDisplay('fetching usage data...', 'info');
+    document.body.classList.add('deployment-loading');
+
+    if (menuContainer) {
+        const listContainer = menuContainer.querySelector('#menu-list-container');
+        if (listContainer) {
+            listContainer.innerHTML = ''; // Clear the menu buttons
+            const loadingGif = document.createElement('img');
+            loadingGif.src = '/static/resources/happy-cat.gif';
+            loadingGif.alt = 'Loading...';
+            loadingGif.className = 'loading-gif';
+            listContainer.appendChild(loadingGif);
+        }
+        if (menuTitle) {
+            menuTitle.textContent = 'fetching usage';
+            menuTitle.classList.add('rainbow-text');
+        }
+    }
+    // --- End: Show Loading GIF & Rainbow Text ---
+
+    const cleanupLoadingUI = () => {
+        document.body.classList.remove('deployment-loading');
+        window.dispatchEvent(new CustomEvent('deploymentstatechange', { detail: { isActive: false } }));
+        if (menuTitle) {
+            menuTitle.classList.remove('rainbow-text');
+        }
+    };
 
     try {
         const response = await fetchWithAuth(`${API_BASE_URL}/usage`);
         if (!response.ok) {
-            // Try to parse the error response for a custom message
             try {
                 const errorData = await response.json();
                 if (errorData && errorData.message) {
                     throw new Error(errorData.message);
                 }
             } catch (e) {
-                // Ignore JSON parsing errors and fall through to the generic error
+                // Ignore JSON parsing errors and fall through
             }
             throw new Error(`Failed to fetch: ${response.status}`);
         }
         const data = await response.json();
+
+        cleanupLoadingUI();
 
         if (data.url) {
             const features = 'toolbar=no,location=no,status=no,menubar=no,scrollbars=yes,resizable=yes,width=900,height=720';
@@ -47,7 +71,7 @@ async function _getUsageLogic(params) {
         }
         
         let usageItems;
-        let menuTitle = 'current monthly usage:';
+        let menuTitleText = 'current monthly usage:'; // Renamed
 
         if (data.message) {
             usageItems = [{
@@ -56,14 +80,11 @@ async function _getUsageLogic(params) {
                 type: 'record'
             }];
         } else if (data.month_name) {
-            menuTitle = `usage for ${data.month_name}:`;
+            menuTitleText = `usage for ${data.month_name}:`;
             
-            let gcpCostDisplay;
-            if (data.gcp_cost < 0) {
-                gcpCostDisplay = `$${(-data.gcp_cost).toFixed(2)} (free)`;
-            } else {
-                gcpCostDisplay = `$${data.gcp_cost.toFixed(2)}`;
-            }
+            let gcpCostDisplay = data.gcp_cost < 0
+                ? `$${(-data.gcp_cost).toFixed(2)} (free)`
+                : `$${data.gcp_cost.toFixed(2)}`;
             
             usageItems = [
                 { id: 'servercult-cost', text: `servercult cost: $${data.servercult_cost.toFixed(2)}`, type: 'record' },
@@ -79,7 +100,7 @@ async function _getUsageLogic(params) {
 
         const finalConfig = {
             id: 'usage-menu',
-            text: menuTitle,
+            text: menuTitleText,
             items: usageItems,
             backTarget: 'dashboard-menu'
         };
@@ -87,6 +108,7 @@ async function _getUsageLogic(params) {
         renderMenu('usage-menu');
 
     } catch (error) {
+        cleanupLoadingUI();
         renderMenu({
             id: 'usage-menu',
             text: 'error',

@@ -21,49 +21,72 @@ function generateSiteDetailsMenu(site) {
         };
     }
 
-    let address = 'N/A';
-    let addressUrl = null;
-    if (site.domain) {
-        addressUrl = `https://${site.domain}`;
-        address = addressUrl;
-    } else if (site.ip_address && site.port) {
-        addressUrl = `http://${site.ip_address}:${site.port}`;
-        address = addressUrl;
-    } else if (site.ip_address) {
-        addressUrl = `http://${site.ip_address}`;
-        address = addressUrl;
-    }
-
-    const addressItem = addressUrl 
-        ? { id: `details-address-${site.id}`, text: `Address: ${address}`, type: 'record', action: 'openAddress', url: addressUrl }
-        : { id: `details-address-${site.id}`, text: `Address: ${address}`, type: 'record' };
-
     let detailItems = [
         { id: `details-machine-name-${site.id}`, text: `Machine: ${site.machine_name || 'Unknown'}`, type: 'record' },
         { id: `details-status-${site.id}`, text: `Status: ${site.status || 'Unknown'}`, type: 'record' },
         { id: `details-schedule-${site.id}`, text: `Backups: ${site.backup_schedule || 'manual'}`, type: 'record' },
-        addressItem,
     ];
 
-    if (site.wordpress) {
-        const adminUrl = addressUrl ? `${addressUrl}/wp-admin` : null;
-        if (adminUrl) {
-            detailItems.push({ id: `details-wp-admin-${site.id}`, text: 'admin panel', type: 'button', action: 'openAddress', url: adminUrl });
+    if (site.status !== 'provisioning') {
+        let address = 'N/A';
+        let addressUrl = null;
+
+        if (site.status === 'relinking') {
+            if (site.relinking_source_for) {
+                // This deployment is LOSING a domain. Its future address is port-based.
+                addressUrl = `http://${site.ip_address}:${site.port}`;
+                address = `${addressUrl}...`; 
+            } else if (site.relinking_target_for) {
+                // This deployment is GAINING a domain. Its future address is domain-based.
+                const domain = site.relinking_target_for;
+                addressUrl = `https://${domain}`;
+                address = `${addressUrl}...`;
+            }
+        } else {
+            // Standard address logic for stable sites
+            if (site.domain) {
+                addressUrl = `https://${site.domain}`;
+                address = addressUrl;
+            } else if (site.ip_address && site.port) {
+                addressUrl = `http://${site.ip_address}:${site.port}`;
+                address = addressUrl;
+            } else if (site.ip_address) {
+                addressUrl = `http://${site.ip_address}`;
+                address = addressUrl;
+            }
+        }
+
+        const addressItem = addressUrl 
+            ? { id: `details-address-${site.id}`, text: `Address: ${address}`, type: 'record', action: 'openAddress', url: addressUrl, className: 'details-last-record' }
+            : { id: `details-address-${site.id}`, text: `Address: ${address}`, type: 'record', className: 'details-last-record' };
+        
+        detailItems.push(addressItem);
+
+        if (addressUrl) {
+            detailItems.push({ id: `details-front-page-${site.id}`, text: 'front page', type: 'button', action: 'openAddress', url: addressUrl });
+        }
+
+        if (site.wordpress && site.status !== 'relinking') {
+            const adminUrl = addressUrl ? `${addressUrl}/wp-admin` : null;
+            if (adminUrl) {
+                detailItems.push({ id: `details-wp-admin-${site.id}`, text: 'admin panel', type: 'button', action: 'openAddress', url: adminUrl });
+            }
         }
     }
 
-    // Pass necessary data for the destroy action via data attributes.
-    // menu.js will convert camelCase properties to kebab-case data attributes.
-    detailItems.push({ 
-        id: `deployment-destroy-${site.id}`, 
-        text: 'destroy', 
-        type: 'button', 
-        action: 'destroyDeployment', 
-        showLoading: true, // Opt-in to the generic loading UI
-        resourceId: site.id,
-        deployment: site.deployment,
-        machineName: site.machine_name
-    });
+    // Only add the destroy button if the site is not being destroyed or provisioned
+    if (site.status !== 'destroying' && site.status !== 'provisioning') {
+        detailItems.push({ 
+            id: `deployment-destroy-${site.id}`, 
+            text: 'destroy', 
+            type: 'button', 
+            action: 'destroyDeployment', 
+            showLoading: true, // Opt-in to the generic loading UI
+            resourceId: site.id,
+            deployment: site.deployment,
+            machineId: site.project_id
+        });
+    }
 
     return {
         id: `site-details-menu-${site.id}`,
@@ -92,6 +115,8 @@ async function fetchAndProcessDeployments() {
                     wordpress: dep.wordpress,
                         zone: vm.zone,
                         backup_schedule: dep.backup_schedule,
+                        relinking_target_for: dep.relinking_target_for,
+                        relinking_source_for: dep.relinking_source_for,
                     type: 'deployment'
                     }));
                     allDeployments.push(...deployments);
@@ -183,9 +208,9 @@ export async function viewSite(siteId) {
 } 
 
 export const destroyDeployment = requireAuthAndSubscription(async (params) => {
-    const { deployment, machineName, renderMenu, menuContainer, menuTitle } = params;
+    const { deployment, machineId, renderMenu, menuContainer, menuTitle } = params;
 
-    if (!deployment || !machineName) {
+    if (!deployment || !machineId) {
         updateStatusDisplay('Site data is incomplete for destroy operation.', 'error');
         return;
     }
@@ -207,7 +232,7 @@ export const destroyDeployment = requireAuthAndSubscription(async (params) => {
         const response = await fetchWithAuth(`${API_BASE_URL}/destroy`, {
             method: 'POST',
             body: {
-                vm_name: machineName,
+                vm_id: machineId,
                 deployment: deployment
             }
         });

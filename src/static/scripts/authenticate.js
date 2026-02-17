@@ -304,8 +304,10 @@ export function requireAuthAndSubscription(actionFn, actionName, options = {}) {
             updateStatusDisplay(message, 'info');
         }
 
-        // Store the original action for re-execution after successful auth (only if not already set)
-        if (typeof window !== 'undefined' && !window.pendingReauthAction) {
+        // Store the original action for re-execution after successful auth.
+        // This *always* overwrites any previously pending action.
+        if (typeof window !== 'undefined') {
+            console.log("Setting pending re-authentication action:", { actionFn: guardedFn, params });
             window.pendingReauthAction = { actionFn: guardedFn, params };
         }
     };

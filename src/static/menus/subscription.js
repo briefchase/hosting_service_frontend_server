@@ -203,7 +203,7 @@ function stopSubscriptionPolling() {
 
 // Define Subscription Menu Configuration
 const subscriptionMenuConfig = {
-    text: 'Subscription',
+    text: 'subscription:',
     items: [
         // This item will be updated dynamically
         { id: 'sub-status', text: 'Status: Checking...', type: 'record' }
