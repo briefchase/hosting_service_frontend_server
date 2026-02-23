@@ -1,6 +1,6 @@
 import { fetchWithAuth, API_BASE_URL } from '/static/main.js';
 import { getUser, clearPendingReauthAction } from '/static/scripts/authenticate.js';
-import { purchaseDomain as apiPurchaseDomain, checkDomainAvailability as apiCheckDomainAvailability } from '/static/scripts/utilities.js';
+import { purchaseDomain as apiPurchaseDomain, checkDomainAvailability as apiCheckDomainAvailability } from '/static/scripts/domains.js';
 import { openPopup } from '/static/scripts/popup.js';
 
 // --- Prompt Mode Management ---
@@ -70,8 +70,8 @@ function sanitizeAllowedInlineHtml(html) {
     return container.innerHTML;
 }
 
-async function handleDomainPurchase(domainName, price, projectId, domainPromptResolver, phoneNumber = null) {
-    console.log(`[Domain Purchase] Attempting to purchase ${domainName} for $${price} in project ${projectId}`);
+async function handleDomainPurchase(domainName, price, projectId, privacy, domainPromptResolver, phoneNumber = null) {
+    console.log(`[Domain Purchase] Attempting to purchase ${domainName} for $${price} in project ${projectId} with privacy ${privacy}`);
     const user = getUser();
     if (!user || !user.token) {
         console.error("[Domain Purchase] User not authenticated.");
@@ -83,6 +83,7 @@ async function handleDomainPurchase(domainName, price, projectId, domainPromptRe
             domainName,
             price,
             projectId,
+            privacy,
             token: user.token,
             phoneNumber // This will be null on the first call.
         });
@@ -105,7 +106,7 @@ async function handleDomainPurchase(domainName, price, projectId, domainPromptRe
 
             if (promptResult.status === 'answered' && promptResult.value) {
                 // Here we recurse with the phone number.
-                return handleDomainPurchase(domainName, price, projectId, domainPromptResolver, promptResult.value);
+                return handleDomainPurchase(domainName, price, projectId, privacy, domainPromptResolver, promptResult.value);
             } else {
                 // User cancelled the very first phone prompt.
                 domainPromptResolver({ status: 'canceled', value: null });
@@ -132,7 +133,7 @@ async function handleDomainPurchase(domainName, price, projectId, domainPromptRe
 
             if (retryPrompt.status === 'answered' && retryPrompt.value) {
                 // User entered a new number, recurse again.
-                return handleDomainPurchase(domainName, price, projectId, domainPromptResolver, retryPrompt.value);
+                return handleDomainPurchase(domainName, price, projectId, privacy, domainPromptResolver, retryPrompt.value);
             } else {
                 // User cancelled the retry prompt.
                 domainPromptResolver({ status: 'canceled', value: null });
@@ -187,59 +188,52 @@ async function handleDomainAvailabilityCheck(domainName, inputElement, priceDisp
         const result = apiResult.result;
         console.log("[Domain Check] Received result:", result);
 
-        switch (result.availability) {
-            case 'AVAILABLE': {
-                inputElement.classList.add('prompt-input-available');
+        if (result.status === 'available') {
+            inputElement.classList.add('prompt-input-available');
 
+            let bestPrivacyOption = null;
+            if (result.supportedPrivacy.includes('PRIVATE_CONTACT_DATA')) {
+                bestPrivacyOption = 'PRIVATE_CONTACT_DATA';
+            } else if (result.supportedPrivacy.includes('REDACTED_CONTACT_DATA')) {
+                bestPrivacyOption = 'REDACTED_CONTACT_DATA';
+            }
+
+            if (bestPrivacyOption) {
                 const purchaseButton = document.createElement('button');
                 purchaseButton.textContent = `$${result.price} / year`;
                 purchaseButton.className = 'prompt-button prompt-purchase-button';
-                    purchaseButton.onclick = async () => {
-                        // Stash the current state before calling prompt again
-                        const originalDomainPromptResolver = currentResolve;
+                purchaseButton.onclick = async () => {
+                    const confirmation = await prompt({
+                        id: 'domain_purchase_confirm',
+                        text: `Are you sure you want to purchase ${domainName}?`,
+                        type: 'options',
+                        options: [
+                            { label: 'yes', value: true },
+                            { label: 'no', value: false }
+                        ]
+                    });
 
-                        const confirmation = await prompt({
-                            id: 'domain_purchase_confirm',
-                            text: `Are you sure you want to purchase ${domainName}?`,
-                            type: 'options',
-                            options: [
-                                { label: 'yes', value: true },
-                                { label: 'no', value: false }
-                            ]
-                        });
-
-                        if (confirmation && confirmation.status === 'answered' && confirmation.value === true) {
-                            // If confirmed, proceed with the purchase using the stashed resolver
-                            if (originalDomainPromptResolver) {
-                                handleDomainPurchase(domainName, result.price, projectId, originalDomainPromptResolver);
-                            } else {
-                                console.error("Could not find original domain prompt to resolve.");
-                            }
+                    if (confirmation && confirmation.status === 'answered' && confirmation.value === true) {
+                        // Pop the original domain prompt from the stack to prevent it from re-rendering,
+                        // then pass its resolver to the purchase handler.
+                        const originalDomainPrompt = promptStack.pop();
+                        if (originalDomainPrompt && originalDomainPrompt.resolve) {
+                            handleDomainPurchase(domainName, result.price, projectId, bestPrivacyOption, originalDomainPrompt.resolve);
                         } else {
-                            // If cancelled, the prompt system will automatically revert.
+                            console.error("Could not find original domain prompt to resolve.");
                         }
-                    };
+                    }
+                };
                 buttonWrapper.appendChild(purchaseButton);
-                break;
+            } else {
+                priceDisplay.textContent = 'Privacy not supported';
+                priceDisplay.style.display = 'block';
             }
-            case 'INVALID':
-                inputElement.classList.add('prompt-input-unavailable');
-                priceDisplay.textContent = 'nope';
-                priceDisplay.style.color = '#e53935';
-                priceDisplay.style.display = 'block';
-                break;
-            case 'UNAVAILABLE':
-                inputElement.classList.add('prompt-input-unavailable');
-                priceDisplay.textContent = 'unavailable';
-                priceDisplay.style.color = '#e53935';
-                priceDisplay.style.display = 'block';
-                break;
-            default:
-                inputElement.classList.add('prompt-input-unavailable');
-                priceDisplay.textContent = 'error';
-                priceDisplay.style.color = '#e53935';
-                priceDisplay.style.display = 'block';
-                break;
+        } else {
+            inputElement.classList.add('prompt-input-unavailable');
+            priceDisplay.textContent = 'unavailable';
+            priceDisplay.style.color = '#e53935';
+            priceDisplay.style.display = 'block';
         }
     } catch (error) {
         console.error("[Domain Check] Error:", error);
@@ -254,17 +248,6 @@ async function handleDomainAvailabilityCheck(domainName, inputElement, priceDisp
  * Cleans up the prompt UI, hiding the prompt and showing the console.
  */
 function cleanupPromptUI() {
-    if (embeddedCheckoutRef) {
-        if (typeof embeddedCheckoutRef.destroy === 'function') {
-            try {
-                embeddedCheckoutRef.destroy();
-            } catch (e) {
-                console.warn("Error destroying Stripe checkout instance:", e);
-            }
-        }
-        embeddedCheckoutRef = null;
-    }
-
     const promptContainer = document.getElementById('prompt-container');
     if (promptContainer) {
         // Remove resize listeners if attached
@@ -319,8 +302,6 @@ export function prompt(promptConfig) {
 
 function processStack() {
     if (promptStack.length === 0) {
-        // Only clean up the UI and exit prompt mode when the stack is truly empty.
-        cleanupPromptUI();
         return;
     }
 
@@ -337,23 +318,14 @@ function processStack() {
         promptStack.push(interruptedPrompt);
         promptStack.push(newPromptToShow);
 
-        // 3. Clean up the current UI content *without* removing the overlay.
+        // 3. Clean up the current UI *without* resolving the promise. This is a manual
+        //    version of cleanupPromptUI that avoids touching the promise.
         const promptContainer = document.getElementById('prompt-container');
         if (promptContainer) {
-            // Remove resize listeners if attached to the old prompt
-            try {
-                if (promptContainer.__updateHeightHandler) {
-                    window.removeEventListener('resize', promptContainer.__updateHeightHandler);
-                    if (window.visualViewport && promptContainer.__vvHandlerAttached) {
-                        window.visualViewport.removeEventListener('resize', promptContainer.__updateHeightHandler);
-                        window.visualViewport.removeEventListener('scroll', promptContainer.__updateHeightHandler);
-                    }
-                }
-            } catch (_) {}
-            promptContainer.innerHTML = ''; // Just clear the content
+            promptContainer.remove();
         }
-        // DO NOT call exitPromptMode(), which causes the flash
-
+        exitPromptMode();
+        
         // 4. Reset state to allow the stack processor to run again from the top.
         isPrompting = false;
         currentResolve = null;
@@ -904,6 +876,11 @@ function _showActualPrompt(promptConfig) {
         if (handler) {
             handler(promptContentWrapper, promptConfig);
         }
+    });
+
+    // Automatically clean up the UI once the promise is settled (resolved or rejected).
+    promise.finally(() => {
+        cleanupPromptUI();
     });
 
     return promise;

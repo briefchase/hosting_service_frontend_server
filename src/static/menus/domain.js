@@ -11,16 +11,12 @@ import {
 import { requireAuthAndSubscription } from '/static/scripts/authenticate.js';
 import { prompt, cancelCurrentPrompt } from '/static/pages/prompt.js';
 import { fetchSites } from '/static/scripts/utilities.js';
-import { relinkDomain as relinkDomainApi } from '/static/scripts/utilities.js';
+import { relinkDomain as relinkDomainApi } from '/static/scripts/domains.js';
 
 async function fetchDomains() {
     const response = await fetchWithAuth(`${API_BASE_URL}/domains`);
     if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        const customError = new Error(errorData.message || `Failed to fetch domains: ${response.statusText}`);
-        customError.id = errorData.error;
-        customError.status = response.status;
-        throw customError;
+        throw new Error(`Failed to fetch domains: ${response.statusText}`);
     }
     return response.json();
 }
@@ -67,11 +63,27 @@ async function promptForNewDomain(context) {
 
 async function _listDomainsLogic(params) {
     const { renderMenu, updateStatusDisplay } = params;
+    try {
         updateStatusDisplay('fetching domains...', 'info');
-        const [domainData] = await Promise.all([
-            fetchDomains()
+        const [domainData, sitesData] = await Promise.all([
+            fetchDomains(),
+            fetchSites()
         ]);
-        if (domainData.message) {
+        
+        const allDeployments = [];
+        if (Array.isArray(sitesData)) {
+            sitesData.forEach(vm => {
+                if (vm.deployments && vm.deployments.length > 0) {
+                    allDeployments.push(...vm.deployments.map(dep => ({
+                        ...dep,
+                        machine_name: vm.name,
+                        deployment_name: dep.deployment_name // Ensure this is present
+                    })));
+                }
+            });
+        }
+        
+        if (domainData.message && allDeployments.length === 0) {
             renderMenu({
                 id: 'domain-menu',
                 text: 'domains:',
@@ -81,7 +93,19 @@ async function _listDomainsLogic(params) {
             return;
         }
 
-        const allDomainObjects = (domainData.domains || []).map(d => ({ ...d, isManaged: d.source === 'registrar' }));
+        const gcpDomainNames = new Set((domainData.domains || []).map(d => d.domainName));
+        const allDomainObjects = (domainData.domains || []).map(d => ({ ...d, isGcpManaged: true }));
+
+        // Find and add externally managed domains that are linked to deployments
+        allDeployments.forEach(dep => {
+            if (dep.domain && !gcpDomainNames.has(dep.domain)) {
+                allDomainObjects.push({
+                    domainName: dep.domain,
+                    isGcpManaged: false,
+                });
+                gcpDomainNames.add(dep.domain); // Add to set to prevent duplicates
+            }
+        });
 
         const domainItems = allDomainObjects.map(d => {
             const menuId = `domain-details-${d.domainName.replace(/\./g, '-')}`;
@@ -97,14 +121,14 @@ async function _listDomainsLogic(params) {
                 });
             } else {
                 // Original logic when not relinking.
-                const linkedDeployment = d.deployment_name;
+                const linkedDeployment = allDeployments.find(dep => dep.domain === d.domainName);
                 detailItems.push({
-                    text: `site: ${linkedDeployment ? linkedDeployment : 'unlinked'}`,
+                    text: `site: ${linkedDeployment ? linkedDeployment.deployment_name : 'unlinked'}`,
                     type: 'record',
                     className: 'details-last-record'
                 });
 
-                if (d.isManaged) {
+                if (d.isGcpManaged) {
                     detailItems.push({
                         id: `relink-${d.domainName.replace(/\./g, '-')}`,
                         text: linkedDeployment ? 'relink' : 'link',
@@ -155,6 +179,14 @@ async function _listDomainsLogic(params) {
         };
         menus['domain-menu'] = finalConfig;
         renderMenu('domain-menu');
+    } catch (error) {
+        renderMenu({
+            id: 'domain-menu',
+            text: 'error',
+            items: [{ text: `could not load domains: ${error.message}`, type: 'record' }],
+            backTarget: 'resource-menu'
+        });
+    }
 }
 
 async function _relinkDomainLogic(params) {
