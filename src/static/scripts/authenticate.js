@@ -205,7 +205,7 @@ export function initializeGoogleSignIn(statusContainer) {
                 updateAuthStatus(statusContainer, ''); // Clear status on new attempt
                 console.log("Received authorization code from Google:", response.code ? response.code.substring(0, 10) + '...' : 'Error/Cancelled');
                 if (response.code) {
-                    updateAuthStatus(statusContainer, 'Authenticating with server...', 'info'); // Indicate progress
+                    updateAuthStatus(statusContainer, 'authenticating with server...', 'info'); // Indicate progress
                     try {
                         console.log('[Auth][Frontend] Posting auth code to backend with Origin:', window.location.origin);
                         const backendResponse = await fetch(`${API_BASE_URL}/authenticate`, {
@@ -348,11 +348,15 @@ export function requireAuthAndSubscription(actionFn, actionName, options = {}) {
                 }
                 const subscriptionData = await response.json();
                 if (subscriptionData.status !== 'active') {
-                    updateStatusDisplay(`active subscription required to ${actionName}.`, 'info');
                     const { initializeStripe, handleSubscribe } = await import('/static/menus/subscription.js');
                     const { updateBackButtonHandler, unregisterBackButtonHandler } = await import('/static/main.js');
                     const { cancelCurrentPrompt } = await import('/static/pages/prompt.js');
-                    const backHandler = () => cancelCurrentPrompt();
+                    const backHandler = () => {
+                        cancelCurrentPrompt();
+                        if (renderMenu && menuContainer && menuContainer.dataset.previousMenu) {
+                            renderMenu(menuContainer.dataset.previousMenu);
+                        }
+                    };
                     updateBackButtonHandler(backHandler);
                     try {
                         await initializeStripe();
@@ -368,21 +372,20 @@ export function requireAuthAndSubscription(actionFn, actionName, options = {}) {
             await actionFn(params);
 
         } catch (error) {
+            // If the error is the specific 'project_not_initialized' error,
+            // re-throw it so the central UI handler in menu.js can catch it without logging a console error here.
+            if (error.id === 'project_not_initialized') {
+                throw error;
+            }
+
             console.error(`Error during guarded action for ${actionName}:`, error);
+            
             if (error && error.message === 'ReauthInitiated') {
                 _initiateReauth(guarded, params);
                 return;
             }
             
             updateStatusDisplay(`unable to verify subscription: ${error.message}`, "error");
-            if (renderMenu) {
-                renderMenu({
-                    id: 'auth-error-menu',
-                    text: 'error',
-                    items: [{ text: `could not verify subscription.`, type: 'record' }, {text: 'please try again later.', type: 'record'}],
-                    backTarget: 'dashboard-menu'
-                });
-            }
             return;
         }
     };

@@ -157,19 +157,10 @@ function cacheAllSiteMenus(sites) {
 
 async function _listSitesLogic(params) {
     const { renderMenu, updateStatusDisplay } = params;
-    try {
         updateStatusDisplay('fetching sites...', 'info');
         const sites = await fetchAndProcessDeployments();
         cacheAllSiteMenus(sites);
         renderMenu('site-list-menu');
-    } catch (error) {
-        renderMenu({
-            id: 'site-list-menu',
-            text: 'error',
-            items: [{ text: `could not load sites: ${error.message}`, type: 'record' }],
-            backTarget: 'resource-menu'
-        });
-    }
 }
 
 export const listSites = requireAuthAndSubscription(_listSitesLogic, 'view sites'); 

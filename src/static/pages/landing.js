@@ -11,12 +11,15 @@ import {
     displayAndPositionTooltip,
     hideTooltip,
     updateLastMouseEvent
-} from '/static/pages/menu.js';
+} from '/static/scripts/tooltip.js';
 import {
     prompt,
     cancelCurrentPrompt,
 } from '/static/pages/prompt.js';
 import { requireAuthAndSubscription } from '/static/scripts/authenticate.js';
+import { TextScramble } from '/static/scripts/utils.js';
+import { hideTutorial, planToShowTutorial } from '/static/scripts/tutorial.js';
+
 
 let musicControlsCleanup = null;
 
@@ -557,29 +560,9 @@ function hideSpikeball() {
 
 // --- Mode Toggle Functions ---
 
-function setupModeToggle() {
-    modeToggleContainerEl = document.getElementById('mode-toggle-container');
-    catModeIconEl = document.getElementById('mode-toggle-cat');
-    seriousModeIconEl = document.getElementById('mode-toggle-serious');
-    if (!modeToggleContainerEl || !catModeIconEl || !seriousModeIconEl) return;
+function attachTooltipHandlers(element) {
+    if (!element) return;
 
-    // Set initial image
-    updateModeToggleImage(getSiteMode());
-
-    // Click handler is the same for both
-    modeToggleContainerEl.addEventListener('click', () => {
-        hideTooltip();
-        const currentMode = getSiteMode();
-        const newMode = currentMode === 'serious' ? 'cat' : 'serious';
-        setSiteMode(newMode);
-    });
-
-    // Prevent the default context menu (e.g., on long press on mobile)
-    modeToggleContainerEl.addEventListener('contextmenu', (event) => {
-        event.preventDefault();
-    });
-
-    // Use the reliable check for the primary input method
     const isTouchDevice = window.matchMedia("(pointer: coarse)").matches;
 
     if (isTouchDevice) {
@@ -599,23 +582,23 @@ function setupModeToggle() {
                 hideTooltip();
                 tooltipIsVisible = false;
             }
-            modeToggleContainerEl.removeEventListener('touchmove', onTouchMove);
+            element.removeEventListener('touchmove', onTouchMove);
         };
 
-        modeToggleContainerEl.addEventListener('touchstart', (event) => {
+        element.addEventListener('touchstart', (event) => {
             if (tooltipIsVisible) return;
-            const tooltipText = modeToggleContainerEl.dataset.tooltipText;
+            const tooltipText = element.dataset.tooltipText;
             if (tooltipText) {
                 pressHoldTimeout = setTimeout(() => {
                     tooltipIsVisible = true;
                     displayAndPositionTooltip(event, tooltipText, true);
-                    modeToggleContainerEl.addEventListener('touchmove', onTouchMove, { passive: true });
+                    element.addEventListener('touchmove', onTouchMove, { passive: true });
                 }, 500);
             }
         }, { passive: true });
 
-        modeToggleContainerEl.addEventListener('touchend', onTouchEnd);
-        modeToggleContainerEl.addEventListener('touchcancel', onTouchEnd);
+        element.addEventListener('touchend', onTouchEnd);
+        element.addEventListener('touchcancel', onTouchEnd);
     } else {
         // --- Desktop: Mouseover Logic ---
         const onMouseMove = (event) => {
@@ -626,20 +609,46 @@ function setupModeToggle() {
         const onMouseLeave = () => {
             hideTooltip();
             updateLastMouseEvent(null); // Clear the shared state
-            modeToggleContainerEl.removeEventListener('mousemove', onMouseMove);
-            modeToggleContainerEl.removeEventListener('mouseleave', onMouseLeave);
+            element.removeEventListener('mousemove', onMouseMove);
+            element.removeEventListener('mouseleave', onMouseLeave);
         };
 
-        modeToggleContainerEl.addEventListener('mouseover', (event) => {
-            const tooltipText = modeToggleContainerEl.dataset.tooltipText;
+        element.addEventListener('mouseover', (event) => {
+            const tooltipText = element.dataset.tooltipText;
             if (tooltipText) {
                 updateLastMouseEvent(event); // Set the initial mouse position
                 displayAndPositionTooltip(event, tooltipText); // Trigger the animation
-                modeToggleContainerEl.addEventListener('mousemove', onMouseMove);
-                modeToggleContainerEl.addEventListener('mouseleave', onMouseLeave);
+                element.addEventListener('mousemove', onMouseMove);
+                element.addEventListener('mouseleave', onMouseLeave);
             }
         });
     }
+}
+
+function setupModeToggle() {
+    modeToggleContainerEl = document.getElementById('mode-toggle-container');
+    catModeIconEl = document.getElementById('mode-toggle-cat');
+    seriousModeIconEl = document.getElementById('mode-toggle-serious');
+    if (!modeToggleContainerEl || !catModeIconEl || !seriousModeIconEl) return;
+
+    // Set initial image
+    updateModeToggleImage(getSiteMode());
+
+    // Click handler is the same for both
+    modeToggleContainerEl.addEventListener('click', () => {
+        hideTutorial(); // Hide tutorial when mode is changed
+        hideTooltip();
+        const currentMode = getSiteMode();
+        const newMode = currentMode === 'serious' ? 'cat' : 'serious';
+        setSiteMode(newMode);
+    });
+
+    // Prevent the default context menu (e.g., on long press on mobile)
+    modeToggleContainerEl.addEventListener('contextmenu', (event) => {
+        event.preventDefault();
+    });
+
+    attachTooltipHandlers(modeToggleContainerEl);
 }
 
 function updateModeToggleImage(mode) {
@@ -733,7 +742,10 @@ function updateLandingElementsForMode(mode) {
 
 // --- Initialization and Cleanup ---
 
-export function initialize(dayOfYear) {
+export function initialize(dayOfYear, options = {}) {
+    // Default to true unless explicitly passed as false
+    const startTutorialTimer = options.startTutorialTimer !== false;
+
     console.log("Initializing landing page specifics...");
     
     // Set daily playlist ID
@@ -774,10 +786,16 @@ export function initialize(dayOfYear) {
         const year = new Date().getFullYear();
         legalYearEl.textContent = String(year);
     }
+
+    // Schedule the tutorial to show after a delay, if enabled.
+    if (startTutorialTimer) {
+        planToShowTutorial(10000); // 10 seconds
+    }
 }
 
 export function cleanup() {
     console.log("Cleaning up landing page specifics...");
+    hideTutorial(); // This will also cancel any planned tutorial
     hideSpotifyEmbed();
     hideSpikeball();
     hideModeToggle();
@@ -798,6 +816,11 @@ export function cleanup() {
  */
 function setupLandingInterface() {
     // This is called by initialize() now, no need for DOMContentLoaded listener
+    const consoleButton = document.getElementById('console-button');
+    if (consoleButton) {
+        consoleButton.dataset.tooltipText = 'venture forth';
+        attachTooltipHandlers(consoleButton);
+    }
 }
 
 function initializeTaglineAnimation() {
@@ -805,61 +828,6 @@ function initializeTaglineAnimation() {
     if (!taglineEl) return;
     taglineEl.innerText = ''; // Clear static HTML text to ensure first animation runs.
 
-    class TextScramble {
-        constructor(el) {
-            this.el = el;
-            this.chars = '!<>-_\\/[]{}—=+*^?#________';
-            this.update = this.update.bind(this);
-        }
-        setText(newText) {
-            const oldText = this.el.innerText;
-            const length = Math.max(oldText.length, newText.length);
-            const promise = new Promise((resolve) => this.resolve = resolve);
-            this.queue = [];
-            for (let i = 0; i < length; i++) {
-                const from = oldText[i] || '';
-                const to = newText[i] || '';
-                const start = Math.floor(Math.random() * 40);
-                const end = start + Math.floor(Math.random() * 40);
-                this.queue.push({ from, to, start, end });
-            }
-            if (this.frameRequest) {
-                cancelAnimationFrame(this.frameRequest);
-            }
-            this.frame = 0;
-            this.update();
-            return promise;
-        }
-        update() {
-            let output = '';
-            let complete = 0;
-            for (let i = 0, n = this.queue.length; i < n; i++) {
-                let { from, to, start, end, char } = this.queue[i];
-                if (this.frame >= end) {
-                    complete++;
-                    output += to;
-                } else if (this.frame >= start) {
-                    if (!char || Math.random() < 0.28) {
-                        char = this.randomChar();
-                        this.queue[i].char = char;
-                    }
-                    output += `<span class="dud">${char}</span>`;
-                } else {
-                    output += from;
-                }
-            }
-            this.el.innerHTML = output;
-            if (complete === this.queue.length) {
-                this.resolve();
-            } else {
-                this.frameRequest = requestAnimationFrame(this.update);
-                this.frame++;
-            }
-        }
-        randomChar() {
-            return this.chars[Math.floor(Math.random() * this.chars.length)];
-        }
-    }
 
     const allPhrases = [
         "Least boring hosting service.",
@@ -880,105 +848,30 @@ function initializeTaglineAnimation() {
     }
 
     const phrases = ["We host websites.", ...allPhrases];
-    let currentIndex = 0;
-    const scramble = new TextScramble(taglineEl);
-    let idleAnimationTimeout = null;
 
-    let stopAllIdleAnimations = false;
-    let idleScrambleTimeouts = [];
-
-    const animateOneCharScramble = (position) => {
-        if (stopAllIdleAnimations) return;
-
-        const text = taglineEl.innerText;
-        const originalChar = text[position];
-        if (!originalChar || originalChar.trim() === '') return;
-
-        let changesCount = 0;
-        
-        // Skew towards lower numbers. 1 is most common, 5 is rarest.
-        const maxChanges = Math.floor(Math.pow(Math.random(), 3) * 5) + 1;
-
-        const changeChar = () => {
-            if (stopAllIdleAnimations) {
-                if (taglineEl.innerText[position] !== originalChar) {
-                    let textArray = taglineEl.innerText.split('');
-                    textArray[position] = originalChar;
-                    taglineEl.innerText = textArray.join('');
-                }
-                return;
-            }
-
-            if (changesCount >= maxChanges) {
-                if (taglineEl.innerText[position] !== originalChar) {
-                    let textArray = taglineEl.innerText.split('');
-                    textArray[position] = originalChar;
-                    taglineEl.innerText = textArray.join('');
-                }
-                return;
-            }
-
-            changesCount++;
-
-            let textArray = taglineEl.innerText.split('');
-            textArray[position] = scramble.randomChar();
-            taglineEl.innerText = textArray.join('');
-            
-            const delay = Math.pow(Math.random(), 5) * 999 + 1; // Skewed heavily towards shorter delays
-            setTimeout(changeChar, delay);
-        };
-
-        changeChar();
-    };
-
-    const scheduleIdleScramblesForInterval = () => {
-        if (stopAllIdleAnimations) return;
-
-        // 50% chance of no spawns. If spawns occur, skew towards fewer.
-        const numScrambles = Math.random() < 0.5 ? 0 : Math.floor(Math.pow(Math.random(), 2) * 3) + 1;
-
-        for (let i = 0; i < numScrambles; i++) {
-            const startDelay = Math.random() * 7000;
-            const timeoutId = setTimeout(() => {
-                if (stopAllIdleAnimations) return;
-                const text = taglineEl.innerText;
-                const len = text.length;
-                if (len > 0) {
-                    const position = Math.floor(Math.random() * len);
-                    animateOneCharScramble(position);
-                }
-            }, startDelay);
-            idleScrambleTimeouts.push(timeoutId);
+    const scramble = new TextScramble(taglineEl, {
+        idleScramble: {
+            probability: 0.5,
+            maxInstances: 3,
+            interval: 7000,
         }
-    };
+    });
 
-    function cyclePhrases() {
-        stopAllIdleAnimations = true;
-        idleScrambleTimeouts.forEach(clearTimeout);
-        idleScrambleTimeouts = [];
-
-        scramble.setText(phrases[currentIndex]).then(() => {
-            stopAllIdleAnimations = false;
-            scheduleIdleScramblesForInterval();
-        });
-        currentIndex = (currentIndex + 1) % phrases.length;
-    }
+    let animationControl = scramble.cycle(phrases, 8000);
 
     const handleTaglineClick = () => {
-        if (taglineAnimationInterval) {
-            clearInterval(taglineAnimationInterval);
+        // Clicking the tagline will stop the current animation and start a new one,
+        // effectively cycling to the next phrase immediately.
+        if (animationControl) {
+            animationControl.stop();
         }
-        cyclePhrases();
-        taglineAnimationInterval = setInterval(cyclePhrases, 8000);
+        animationControl = scramble.cycle(phrases, 8000);
     };
     
     if (!taglineEl.dataset.clickAttached) {
         taglineEl.addEventListener('click', handleTaglineClick);
         taglineEl.dataset.clickAttached = 'true';
     }
-
-    cyclePhrases();
-    taglineAnimationInterval = setInterval(cyclePhrases, 8000);
 }
 
 // --- Global Setup (runs when module is loaded) ---

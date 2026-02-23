@@ -5,6 +5,7 @@ export const API_BASE_URL = 'https://api.servercult.com';
 
 // Import the main menu initialization function from the common module
 import { initializeMenu, renderMenu, cleanupCurrentMenu } from '/static/pages/menu.js';
+import { planToShowTutorial } from '/static/scripts/tutorial.js';
 
 // Import the Google Sign-In functions
 import {
@@ -313,7 +314,7 @@ function setupLandingViewListeners() {
 /**
  * Loads and displays the landing view from landing.html.
  */
-async function loadLandingView() {
+async function loadLandingView(options = {}) {
     history.replaceState({ view: 'landing' }, '', window.location.pathname.split('#')[0]);
     currentView = 'landing'; // Update view state to 'landing'
     terminalReturnParams = null; // Clear return params
@@ -357,7 +358,7 @@ async function loadLandingView() {
     setupLandingViewListeners();
 
     const landingModule = await import('/static/pages/landing.js');
-    landingModule.initialize(dayOfYear);
+    landingModule.initialize(dayOfYear, options); // Pass options through here
     currentPageCleanup = landingModule.cleanup;
 
     // Apply special text effects after content is loaded
@@ -515,7 +516,6 @@ export async function loadTerminalView(params = {}) {
     consoleContainer.insertAdjacentHTML('beforeend', terminalHTML);
     console.log("Terminal HTML loaded into console-container.");
 
-    if (promptContainer) promptContainer.style.display = 'none';
     if (mainContent) mainContent.style.display = 'none';
     
     // Hide account button, but keep header visible for back button
@@ -890,6 +890,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const urlParams = new URLSearchParams(window.location.search);
     const sessionId = urlParams.get('session_id');
     const isOrderReturn = window.location.pathname.includes('/order/return');
+    const isWhatPage = window.location.pathname === '/what';
 
     if (isOrderReturn && sessionId) {
         // The user has returned from a Stripe checkout session.
@@ -906,12 +907,32 @@ document.addEventListener('DOMContentLoaded', async () => {
         } finally {
             // Clean up the URL and load the default view
             window.history.replaceState({}, document.title, "/");
-            loadLandingView();
+            loadLandingView(); // This will start the default 10-second timer
         }
+    } else if (isWhatPage) {
+        // Handle the /what route
+        console.log("Detected /what route. Loading landing view and showing prompt.");
+        
+        // Clean the URL, then load the landing view, instructing it not to start its own timer.
+        window.history.replaceState({}, document.title, "/");
+        loadLandingView({ startTutorialTimer: false });
+        
+        // Use a small delay to ensure the view is rendered before the prompt appears
+        setTimeout(async () => {
+            try {
+                const { showWhatPrompt } = await import('/static/scripts/what.js');
+                // Wait for the prompt to be dismissed
+                await showWhatPrompt();
+                // Then wait 1 second before showing the tutorial
+                planToShowTutorial(1000);
+            } catch (error) {
+                console.error("Failed to show 'what' prompt:", error);
+            }
+        }, 100);
     } else {
         // Standard initial load
         console.log("Initial load, always loading landing view.");
-        loadLandingView();
+        loadLandingView(); // This will start the default 10-second timer
     }
 
     // Register the service worker (restored original code)

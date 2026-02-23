@@ -81,7 +81,6 @@ function _cancelActiveRestore(reason, statusMessage) {
 // --- UNWRAPPED ACTIONS ---
 
 const _listDeploymentsForBackup = async ({ renderMenu, updateStatusDisplay }) => {
-    try {
         updateStatusDisplay('fetching deployments...', 'info');
         const vms = await fetchSites();
         let deployments = [];
@@ -139,11 +138,6 @@ const _listDeploymentsForBackup = async ({ renderMenu, updateStatusDisplay }) =>
 
         menus[deploymentsMenu.id] = deploymentsMenu;
         renderMenu(deploymentsMenu);
-
-    } catch (error) {
-        console.error("Error listing deployments for backup:", error);
-        updateStatusDisplay(`Error: ${error.message}`, 'error');
-    }
 };
 
 const _createScriptBackup = async ({ resourceId, renderMenu, updateStatusDisplay }) => {
@@ -188,13 +182,15 @@ const _createScriptBackup = async ({ resourceId, renderMenu, updateStatusDisplay
 
 const _showRestoreMenu = async ({ renderMenu, updateStatusDisplay }) => {
     window.dispatchEvent(new CustomEvent('deploymentstatechange', { detail: { isActive: true } }));
-    try {
         updateStatusDisplay('fetching backups...', 'info');
         const response = await fetchWithAuth(`${API_BASE_URL}/list-backups`);
         const result = await response.json();
 
         if (!response.ok) {
-            throw new Error(result.error || 'Failed to fetch backups.');
+        // We need to re-construct the error object so it can be caught by the central handler
+        const customError = new Error(result.error || 'Failed to fetch backups.');
+        customError.id = result.error; // Pass the error code if available
+        throw customError;
         }
 
         if (!result.backups || result.backups.length === 0) {
@@ -225,11 +221,6 @@ const _showRestoreMenu = async ({ renderMenu, updateStatusDisplay }) => {
         };
         menus[menuConfig.id] = menuConfig;
         renderMenu(menuConfig);
-
-    } catch (error) {
-        console.error("Error listing backups for restore:", error);
-        updateStatusDisplay(`Error: ${error.message}`, 'error');
-    }
 };
 
 const _selectMachineForRestore = async (params) => {
@@ -238,8 +229,6 @@ const _selectMachineForRestore = async (params) => {
         updateStatusDisplay('Error: No backup file was selected.', 'error');
         return;
     }
-
-    try {
         updateStatusDisplay('fetching machines...', 'info');
         const machines = await fetchSites(); 
         
@@ -295,11 +284,6 @@ const _selectMachineForRestore = async (params) => {
         };
         menus[menuConfig.id] = menuConfig;
         renderMenu(menuConfig);
-
-    } catch (error) {
-        console.error("Error listing machines for restore:", error);
-        updateStatusDisplay(`Error: ${error.message}`, 'error');
-    }
 };
 
 
@@ -587,7 +571,6 @@ async function _communicateRestore(ws, params) {
 
 const _showScheduleMenu = async ({ renderMenu, updateStatusDisplay }) => {
     window.dispatchEvent(new CustomEvent('deploymentstatechange', { detail: { isActive: true } }));
-    try {
         updateStatusDisplay('fetching deployments...', 'info');
         const vms = await fetchSites({ include_schedule: true });
         let deployments = [];
@@ -648,11 +631,6 @@ const _showScheduleMenu = async ({ renderMenu, updateStatusDisplay }) => {
         
         menus[deploymentsMenu.id] = deploymentsMenu;
         renderMenu(deploymentsMenu);
-
-    } catch (error) {
-        console.error("Error listing deployments for schedule:", error);
-        updateStatusDisplay(`Error: ${error.message}`, 'error');
-    }
 };
 
 const _promptBackupSchedule = async ({ resourceId, updateStatusDisplay, renderMenu, menuContainer, menuTitle }) => {
@@ -698,8 +676,7 @@ const _promptBackupSchedule = async ({ resourceId, updateStatusDisplay, renderMe
 
 const _setBackupSchedule = async ({ deployment, interval, updateStatusDisplay, renderMenu }) => {
     try {
-        // This is already being set by the loading UI in the calling function.
-        // updateStatusDisplay(`setting backup schedule for ${deployment.name}...`, 'info');
+        updateStatusDisplay('updating schedule...', 'info');
         const schedulePayload = {
             deployment: deployment.deployment,
             project_id: deployment.project_id,

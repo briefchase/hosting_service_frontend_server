@@ -7,48 +7,32 @@ import { openPopup } from '/static/scripts/popup.js';
 async function _getUsageLogic(params) {
     const { renderMenu, updateStatusDisplay, menuContainer, menuTitle } = params;
 
-    // --- Start: Show Loading GIF & Rainbow Text ---
-    window.dispatchEvent(new CustomEvent('deploymentstatechange', { detail: { isActive: true } }));
     updateStatusDisplay('fetching usage data...', 'info');
-    document.body.classList.add('deployment-loading');
-
-    if (menuContainer) {
-        const listContainer = menuContainer.querySelector('#menu-list-container');
-        if (listContainer) {
-            listContainer.innerHTML = ''; // Clear the menu buttons
-            const loadingGif = document.createElement('img');
-            loadingGif.src = '/static/resources/happy-cat.gif';
-            loadingGif.alt = 'Loading...';
-            loadingGif.className = 'loading-gif';
-            listContainer.appendChild(loadingGif);
-        }
-        if (menuTitle) {
-            menuTitle.textContent = 'fetching usage';
-            menuTitle.classList.add('rainbow-text');
-        }
-    }
-    // --- End: Show Loading GIF & Rainbow Text ---
 
     const cleanupLoadingUI = () => {
-        document.body.classList.remove('deployment-loading');
-        window.dispatchEvent(new CustomEvent('deploymentstatechange', { detail: { isActive: false } }));
-        if (menuTitle) {
-            menuTitle.classList.remove('rainbow-text');
-        }
+        // This function is now a no-op but is kept to avoid breaking existing call sites.
+        // The generic loading UI is handled by menu.js.
     };
 
     try {
         const response = await fetchWithAuth(`${API_BASE_URL}/usage`);
         if (!response.ok) {
+            let errorToThrow;
             try {
                 const errorData = await response.json();
-                if (errorData && errorData.message) {
-                    throw new Error(errorData.message);
+                if (errorData && errorData.error === 'project_not_initialized') {
+                    // Create a custom error that menu.js can identify
+                    errorToThrow = new Error(errorData.message || 'Project not initialized.');
+                    errorToThrow.id = 'project_not_initialized';
+                } else if (errorData && errorData.message) {
+                    errorToThrow = new Error(errorData.message);
+                } else {
+                    errorToThrow = new Error(`Failed to fetch: ${response.status}`);
                 }
             } catch (e) {
-                // Ignore JSON parsing errors and fall through
+                errorToThrow = new Error(`Failed to fetch: ${response.status}`);
             }
-            throw new Error(`Failed to fetch: ${response.status}`);
+            throw errorToThrow;
         }
         const data = await response.json();
 
@@ -80,7 +64,7 @@ async function _getUsageLogic(params) {
                 type: 'record'
             }];
         } else if (data.month_name) {
-            menuTitleText = `usage for ${data.month_name}:`;
+            menuTitleText = `usage for ${data.month_name.toLowerCase()}:`;
             
             let gcpCostDisplay = data.gcp_cost < 0
                 ? `$${(-data.gcp_cost).toFixed(2)} (free)`
@@ -108,6 +92,12 @@ async function _getUsageLogic(params) {
         renderMenu('usage-menu');
 
     } catch (error) {
+        // If it's our special error, re-throw it so the main menu handler can catch it.
+        if (error.id === 'project_not_initialized') {
+            throw error;
+        }
+        
+        // For all other errors, handle them locally.
         cleanupLoadingUI();
         renderMenu({
             id: 'usage-menu',

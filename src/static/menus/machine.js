@@ -123,19 +123,10 @@ function cacheAllMachineMenus(vms) {
 }
 
 async function _listMachinesLogic({ renderMenu, updateStatusDisplay }) {
-    try {
-        updateStatusDisplay('fetching machines...', 'info');
-        const vms = await fetchAndProcessMachines();
-        cacheAllMachineMenus(vms);
-        renderMenu('machine-list-menu');
-    } catch (error) {
-        renderMenu({
-            id: 'machine-list-menu',
-            text: 'error',
-            items: [{ text: `could not load machines: ${error.message}`, type: 'record' }],
-            backTarget: 'resource-menu'
-        });
-    }
+    updateStatusDisplay('fetching machines...', 'info');
+    const vms = await fetchAndProcessMachines();
+    cacheAllMachineMenus(vms);
+    renderMenu('machine-list-menu');
 }
 
 export const destroyMachine = requireAuthAndSubscription(async (params) => {

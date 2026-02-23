@@ -11,6 +11,7 @@ import {
     updateSiteTitleVisibility,
     updateAccountButtonVisibility
 } from '/static/main.js'; // Updated import path
+import { displayAndPositionTooltip, hideTooltip, updateLastMouseEvent } from '/static/scripts/tooltip.js';
 
 // Import the fetch handler - needed for auto-fetching on render
 // import { handleFetchResources } from './instance-menu.js'; // Keep this relative path assumption in mind
@@ -21,10 +22,6 @@ let menuContainerElement = null;
 let dynamicMenuTitleElement = null; // Renamed to avoid confusion with static site title
 let currentAuthState = null; // Store user authentication state
 let currentMenuId = null; // Store the ID of the currently rendered menu
-let tooltipElement = null; // Reference to the tooltip DOM element
-let tooltipTimeout = null; // Store the timeout ID for the tooltip
-let tooltipAnimationInterval = null; // Store the interval for the typewriter effect
-let lastMouseEvent = null; // Store the last mouse event for desktop positioning
 
 // --- Deployment State Listener ---
 // Listens for events from deploy.js to know when to hide the site title.
@@ -35,13 +32,6 @@ window.addEventListener('deploymentstatechange', (e) => {
     checkHeaderCollision();
 });
 
-/**
- * Allows other modules to update the last known mouse event, enabling shared tooltip logic.
- * @param {MouseEvent|null} event - The latest mouse event, or null to clear it.
- */
-export function updateLastMouseEvent(event) {
-    lastMouseEvent = event;
-}
 
 /**
  * Updates the authentication state within the menu module.
@@ -344,151 +334,6 @@ export async function renderMenu(menuIdOrConfig) {
     }
 }
 
-// --- Tooltip Handling --- START ---
-
-function ensureTooltipElement() {
-    if (tooltipElement && document.body.contains(tooltipElement)) {
-        return;
-    }
-    tooltipElement = document.getElementById('tooltip');
-    if (!tooltipElement) {
-        console.log("Creating tooltip element.");
-        tooltipElement = document.createElement('div');
-        tooltipElement.id = 'tooltip';
-        document.body.appendChild(tooltipElement);
-    }
-}
-
-/**
- * Displays and positions the tooltip. If infoText is provided, it shows the tooltip
- * after a delay. If infoText is null, it just updates the position of the visible tooltip.
- * @param {MouseEvent} event - The mouse event.
- * @param {string|null} infoText - The text to display in the tooltip.
- * @param {boolean} isImmediate - If true, bypasses the initial 500ms show delay.
- */
-export function displayAndPositionTooltip(event, infoText = null, isImmediate = false) {
-    ensureTooltipElement();
-    if (!tooltipElement) return;
-
-    const positionTooltip = (e) => {
-        if (tooltipElement.style.display !== 'block') return;
-
-        const isTouchEvent = e.type.startsWith('touch');
-        const pos = isTouchEvent ? e.touches[0] : e;
-
-        if (!pos) return; // Can happen on touchend
-
-        const tooltipHeight = tooltipElement.offsetHeight;
-        const tooltipWidth = tooltipElement.offsetWidth;
-        const bodyRect = document.body.getBoundingClientRect();
-
-        let top, left;
-
-        if (isTouchEvent) {
-            // Mobile: Horizontally centered ABOVE the finger, with more offset
-            top = pos.pageY - tooltipHeight - 60; // Increased offset further
-            left = pos.pageX - (tooltipWidth / 2);
-
-            // Boundary checks
-            if (left < bodyRect.left + 5) left = bodyRect.left + 5;
-            if (left + tooltipWidth > bodyRect.right - 5) left = bodyRect.right - tooltipWidth - 5;
-            if (top < bodyRect.top + 5) top = pos.pageY + 25; // Flip below
-        } else {
-            // Desktop: To the right of the cursor
-            const offsetX = 15;
-            top = pos.pageY - (tooltipHeight / 2);
-            left = pos.pageX + offsetX;
-
-            // Boundary checks
-            if (left + tooltipWidth > bodyRect.right) left = pos.pageX - tooltipWidth - offsetX;
-            if (left < bodyRect.left) left = bodyRect.left + 5;
-            if (top < bodyRect.top) top = bodyRect.top + 5;
-            if (top + tooltipHeight > bodyRect.bottom) top = bodyRect.bottom - tooltipHeight - 5;
-        }
-
-        tooltipElement.style.left = `${left}px`;
-        tooltipElement.style.top = `${top}px`;
-    };
-
-    const showAndAnimate = () => {
-        const isTouchEvent = event.type.startsWith('touch');
-
-        // Prepare the tooltip element but keep it invisible.
-        tooltipElement.textContent = '';
-        tooltipElement.style.display = 'block';
-        tooltipElement.style.visibility = 'hidden';
-
-        let i = 0;
-        clearInterval(tooltipAnimationInterval);
-        tooltipAnimationInterval = setInterval(() => {
-            if (i < infoText.length) {
-                tooltipElement.textContent += infoText.charAt(i);
-
-                // Position the tooltip based on its current content width.
-                const currentPositionEvent = isTouchEvent ? event : lastMouseEvent;
-                if (currentPositionEvent) {
-                    positionTooltip(currentPositionEvent);
-                }
-
-                // Make the tooltip visible only on the first frame, after it has content and is positioned.
-                if (i === 0) {
-                    tooltipElement.style.visibility = 'visible';
-                }
-
-                i++;
-            } else {
-                clearInterval(tooltipAnimationInterval);
-            }
-        }, 35);
-    };
-
-    if (infoText) { // This is a "show" request
-        clearTimeout(tooltipTimeout);
-        clearInterval(tooltipAnimationInterval);
-
-        const delay = isImmediate ? 0 : 500;
-        tooltipTimeout = setTimeout(showAndAnimate, delay);
-
-    } else { // This is a "reposition" request
-        positionTooltip(event);
-    }
-}
-
-export function hideTooltip() {
-    clearTimeout(tooltipTimeout); // Clear any pending show requests
-    clearInterval(tooltipAnimationInterval); // Stop any ongoing animation
-    if (tooltipElement) {
-        tooltipElement.style.display = 'none';
-    }
-}
-
-
-function findItemInfo(targetLi) {
-    if (!targetLi) return null;
-
-    const itemId = targetLi.id || targetLi.dataset.resourceId;
-    const menuConfig = menus[currentMenuId];
-
-    if (!menuConfig || !menuConfig.items || !itemId) {
-         return null;
-    }
-
-    // Find the corresponding item in the menu configuration to get its tooltip text.
-    let allItems = [];
-    if (Array.isArray(menuConfig.items)) {
-        allItems = menuConfig.items;
-        menuConfig.items.forEach(item => {
-            if (item.instances && Array.isArray(item.instances)) {
-                allItems = allItems.concat(item.instances);
-            }
-        });
-    }
-    
-    return allItems.find(item => item.id === itemId);
-}
-
-// Obsolete mouse handlers removed. New logic is self-contained in initializeMenu.
-
 // --- Tooltip Handling --- END ---
 
 // --- Status Display Function --- START ---
@@ -547,6 +392,30 @@ export function clearStatusDisplay() {
     }
 }
 // --- Status Display Function --- END ---
+
+function findItemInfo(targetLi) {
+    if (!targetLi) return null;
+
+    const itemId = targetLi.id || targetLi.dataset.resourceId;
+    const menuConfig = menus[currentMenuId];
+
+    if (!menuConfig || !menuConfig.items || !itemId) {
+         return null;
+    }
+
+    // Find the corresponding item in the menu configuration to get its tooltip text.
+    let allItems = [];
+    if (Array.isArray(menuConfig.items)) {
+        allItems = menuConfig.items;
+        menuConfig.items.forEach(item => {
+            if (item.instances && Array.isArray(item.instances)) {
+                allItems = allItems.concat(item.instances);
+            }
+        });
+    }
+    
+    return allItems.find(item => item.id === itemId);
+}
 
 // Cleanup function to call onLeave for current menu
 export function cleanupCurrentMenu() {
@@ -609,9 +478,8 @@ export function initializeMenu(containerElement, handlers, userState) {
     actionHandlers = handlers || {};      // Store the provided handlers
     currentAuthState = userState;         // Store the user authentication state
 
-    // --- Tooltip Setup --- START ---
-    ensureTooltipElement();
-    // --- Tooltip Setup --- END ---
+    // The new tooltip.js module handles its own element creation.
+    // No setup is needed here anymore.
 
     // Initial Render - Start with the main menu (assuming it's registered)
     if (menus['dashboard-menu']) {
@@ -678,7 +546,7 @@ export function initializeMenu(containerElement, handlers, userState) {
             let currentLi = null;
 
             const onMouseMove = (event) => {
-                lastMouseEvent = event; // Continuously update the last mouse event
+                updateLastMouseEvent(event); // Continuously update the last mouse event
                 displayAndPositionTooltip(event);
             };
 
@@ -690,7 +558,7 @@ export function initializeMenu(containerElement, handlers, userState) {
                     currentLi.removeEventListener('mouseleave', onMouseLeave);
                 }
                 currentLi = null;
-                lastMouseEvent = null; // Clear the event when the mouse leaves
+                updateLastMouseEvent(null); // Clear the event when the mouse leaves
             };
 
             siteContainer.addEventListener('mouseover', (event) => {
@@ -701,7 +569,7 @@ export function initializeMenu(containerElement, handlers, userState) {
 
                 const itemInfo = findItemInfo(currentLi);
                 if (itemInfo && itemInfo.tooltip) {
-                    lastMouseEvent = event; // Store the initial mouse event
+                    updateLastMouseEvent(event); // Store the initial mouse event
                     displayAndPositionTooltip(event, itemInfo.tooltip);
                     currentLi.addEventListener('mousemove', onMouseMove);
                     currentLi.addEventListener('mouseleave', onMouseLeave);
@@ -804,12 +672,22 @@ export function initializeMenu(containerElement, handlers, userState) {
                         // Pass the constructed params object
                         await actionHandlers[action](params);
                     } catch (error) {
+                        // Handle the specific "project_not_initialized" error.
+                        if (error.id === 'project_not_initialized') {
+                            // The UI is in a loading state. Use updateStatusDisplay to show the message.
+                            // This will replace the "fetching..." message in the correct element.
+                            updateStatusDisplay("You must initiate at least one deployment before accessing this menu.", 'info');
+                            // The back button will now return the user to the previous menu,
+                            // as the 'data-loading' and 'data-previous-menu' attributes are already set.
+                        } else {
                         console.error(`Error executing action "${action}":`, error);
-                         // Display error in the menu container
-                         // Update the menu config to show the error temporarily
-                         const currentMenuId = menuContainerElement.querySelector('.menu')?.id || 'dashboard-menu'; // Guess current menu or default
-                         menuContainerElement.innerHTML = `<p>Error performing action: ${error.message}</p><span class="back-button" data-target-menu="${currentMenuId}">&lt; back</span>`;
-                         if (dynamicMenuTitleElement) dynamicMenuTitleElement.textContent = 'Error'; // Update title on action error
+                            // For other errors, restore the previous menu and show a status message.
+                            const previousMenuId = menuContainerElement.dataset.previousMenu;
+                            if (previousMenuId) {
+                                renderMenu(previousMenuId);
+                            }
+                            updateStatusDisplay(`Error: ${error.message}`, 'error');
+                        }
                     } finally {
                         // Action handlers are now responsible for setting the final title.
                         // We no longer need to generically remove rainbow text.

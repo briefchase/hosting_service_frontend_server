@@ -220,16 +220,16 @@ async function _initiateDeployment(params = {}, deploymentType) {
 
 // --- Action Handlers ---
 
-// Action handler for deploying a blank VM
+// Action handler for advanced deployment
 export const handleDeployAdvanced = requireAuthAndSubscription(
     (params) => _initiateDeployment(params, 'advanced'),
-    'deploy a vm'
+    'advanced deployment'
 );
 
-// Action handler for deploying WordPress
+// Action handler for simple deployment
 export const handleDeploySimple = requireAuthAndSubscription(
     (params) => _initiateDeployment(params, 'simple'),
-    'deploy wordpress'
+    'simple deployment'
 );
 
 

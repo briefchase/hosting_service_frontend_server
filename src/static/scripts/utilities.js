@@ -15,17 +15,123 @@ export async function fetchSites(options = {}) {
     try {
         const response = await fetchWithAuth(url);
         if (!response.ok) {
-            // Try to get more detailed error from response body
-            const errorData = await response.json().catch(() => null);
-            if (errorData && errorData.error) {
-                throw new Error(errorData.error);
-            }
-            throw new Error(`Failed to fetch sites: ${response.statusText}`);
+            // The response is not ok, so it's an error. We expect a JSON body.
+            const errorData = await response.json().catch(() => ({ 
+                message: `HTTP error ${response.status}: ${response.statusText}` 
+            }));
+
+            // Create a new Error object that includes the structured data.
+            const customError = new Error(errorData.message || 'An unknown error occurred');
+            customError.id = errorData.error; // e.g., 'project_not_initialized'
+            customError.status = response.status;
+            throw customError; // Throw the structured error.
         }
+        // If the response is OK, parse and return the JSON.
         return await response.json();
     } catch (error) {
         console.error("Error in fetchSites:", error);
-        // Re-throw the error so the caller can handle it, e.g., to show a UI message
+        // Re-throw the error so the caller can handle it.
+        // This will be either the customError from above or a network error.
         throw error;
     }
 }
+
+
+export async function purchaseDomain({ domainName, price, projectId, token, phoneNumber = null }) {
+    if (!token) return { ok: false, status: 401, error: 'unauthorized' };
+
+    try {
+        const payload = {
+            domain: domainName,
+            price: price,
+            project_id: projectId
+        };
+        // Expects phoneNumber to be an object: { countryCode, number }
+        if (phoneNumber && phoneNumber.countryCode && phoneNumber.number) {
+            payload.phone_country_code = phoneNumber.countryCode;
+            payload.phone_number = phoneNumber.number;
+        }
+
+        const response = await fetchWithAuth(`${API_BASE_URL}/domains`, {
+            method: 'POST',
+            body: payload
+        });
+
+        const contentType = response.headers.get('content-type') || '';
+        const body = contentType.includes('application/json')
+            ? await response.json().catch(() => ({}))
+            : await response.text().catch(() => '');
+
+        if (response.ok) {
+            return { ok: true, result: body };
+        }
+
+        return {
+            ok: false,
+            status: response.status,
+            error: (body && body.error) || `Server returned ${response.status}`,
+            data: body
+        };
+    } catch (error) {
+        return { ok: false, status: 0, error: error.message };
+    }
+}
+
+export async function checkDomainAvailability({ domainName, token }) {
+    if (!token) return { ok: false, status: 401, error: 'unauthorized' };
+    if (!domainName) return { ok: false, status: 400, error: 'domain_required' };
+
+    try {
+        const response = await fetchWithAuth(`${API_BASE_URL}/check-domain-availability`, {
+            method: 'POST',
+            body: { domain: domainName }
+        });
+
+        const contentType = response.headers.get('content-type') || '';
+        const body = contentType.includes('application/json')
+            ? await response.json().catch(() => ({}))
+            : await response.text().catch(() => '');
+
+        if (!response.ok) {
+            return {
+                ok: false,
+                status: response.status,
+                error: (body && body.error) || `Server returned ${response.status}`,
+                data: body
+            };
+        }
+
+        return { ok: true, result: body };
+    } catch (error) {
+        return { ok: false, status: 0, error: error.message };
+    }
+}
+
+
+export async function relinkDomain({ domainName, deployment_name, machine_id }) {
+    try {
+        const response = await fetchWithAuth(`${API_BASE_URL}/relink-domain`, {
+            method: 'POST',
+            body: {
+                domainName,
+                deployment_name,
+                machine_id
+            }
+        });
+
+        const body = await response.json().catch(() => ({}));
+
+        if (response.ok) {
+            return { ok: true, result: body };
+        }
+
+        return {
+            ok: false,
+            status: response.status,
+            error: body.error || `Server returned ${response.status}`
+        };
+    } catch (error) {
+        return { ok: false, status: 0, error: error.message };
+    }
+}
+

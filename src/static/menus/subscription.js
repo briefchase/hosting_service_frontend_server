@@ -32,8 +32,11 @@ export async function initializeStripe() {
 }
 
 // Handle subscription checkout
-export async function handleSubscribe() {
-    updateStatusDisplay("loading...", "info");
+// This function now uses the generic loading UI via showLoading: true
+// The 'params' object is passed by the menu.js click handler.
+export async function handleSubscribe(params) {
+    const { updateStatusDisplay } = params;
+    updateStatusDisplay('loading...', 'info');
 
     try {
         const response = await fetchWithAuth(`${API_BASE_URL}/create-checkout-session`, {
@@ -79,7 +82,26 @@ export async function handleSubscribe() {
 // Open Stripe billing portal (frontend may be allowed to talk to Stripe directly per your note)
 // Billing portal removed
 
-export async function handleCancelSubscription() {
+import { prompt } from '/static/pages/prompt.js';
+
+// This function now uses the generic loading UI via showLoading: true
+// The 'params' object is passed by the menu.js click handler.
+export async function handleCancelSubscription(params) {
+    const { updateStatusDisplay } = params;
+    const confirmation = await prompt({
+        id: 'confirm-cancel-subscription-prompt',
+        text: "Are you sure you want to cancel your membership? Scheduled backups will not be created, and your deployed machines will remain active. You may however, enable your membership again anytime in the future.",
+        type: 'options',
+        options: [{ label: 'yes', value: true }, { label: 'no', value: false }]
+    });
+
+    if (confirmation.status !== 'answered' || confirmation.value !== true) {
+        updateStatusDisplay('Cancellation aborted.', 'info');
+        // The generic loading UI handler in menu.js will automatically
+        // revert to the previous menu, so no extra action is needed here.
+        return; 
+    }
+
     try {
         updateStatusDisplay('canceling...', 'info');
         const response = await fetchWithAuth(`${API_BASE_URL}/cancel-subscription`, {
@@ -111,7 +133,7 @@ async function fetchSubscriptionStatus() {
         const statusItem = menus['subscription-menu'].items.find(item => item.id === 'sub-status');
         let actionItem = menus['subscription-menu'].items.find(item => item.id === 'subscription-action');
         if (!actionItem) {
-            actionItem = { id: 'subscription-action', type: 'button', text: '', action: null };
+            actionItem = { id: 'subscription-action', type: 'button', text: '', action: null, showLoading: true };
             menus['subscription-menu'].items.push(actionItem);
         }
         
@@ -206,7 +228,7 @@ const subscriptionMenuConfig = {
     text: 'subscription:',
     items: [
         // This item will be updated dynamically
-        { id: 'sub-status', text: 'Status: Checking...', type: 'record' }
+        { id: 'sub-status', text: 'Status: Checking...', type: 'record', className: 'details-last-record' }
     ],
     backTarget: 'dashboard-menu',
     onRender: async () => {
