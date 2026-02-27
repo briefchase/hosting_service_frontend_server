@@ -1,4 +1,5 @@
 import { menus, renderMenu, updateStatusDisplay } from '/static/pages/menu.js';
+import { registerHandler } from '../scripts/registry.js';
 import {
     API_BASE_URL,
     fetchWithAuth,
@@ -6,7 +7,7 @@ import {
     updateSiteTitleVisibility
 } from '/static/main.js';
 import { requireAuthAndSubscription } from '/static/scripts/authenticate.js';
-import { fetchSites as apiFetchSites } from '/static/scripts/utilities.js';
+import { fetchSites as apiFetchSites } from '/static/scripts/api.js';
 import { prompt } from '/static/pages/prompt.js';
 
 // No more global cache. Data is fetched on demand.
@@ -282,3 +283,9 @@ export async function destroySite(params) {
         updateStatusDisplay(`could not destroy: ${e.message}`, 'error');
     }
 }
+
+// Register handlers with the central registry
+registerHandler('listSites', listSites);
+registerHandler('destroySite', destroySite);
+registerHandler('destroyDeployment', destroyDeployment);
+registerHandler('openAddress', openAddress);

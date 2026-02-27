@@ -1,12 +1,11 @@
 import {
     fetchWithAuth,
     API_BASE_URL,
-    updateBackButtonHandler,
-    unregisterBackButtonHandler,
     setSiteMode,
     getSiteMode,
     dayOfYear
 } from '/static/main.js';
+import { pushBackHandler } from '/static/scripts/back.js';
 import {
     displayAndPositionTooltip,
     hideTooltip,
@@ -14,10 +13,9 @@ import {
 } from '/static/scripts/tooltip.js';
 import {
     prompt,
-    cancelCurrentPrompt,
 } from '/static/pages/prompt.js';
 import { requireAuthAndSubscription } from '/static/scripts/authenticate.js';
-import { TextScramble } from '/static/scripts/utils.js';
+import { TextScramble } from '/static/scripts/effects.js';
 import { hideTutorial, planToShowTutorial } from '/static/scripts/tutorial.js';
 
 
@@ -327,28 +325,6 @@ function togglePlayPause() {
     }
 }
 
-function skipToPrevious() {
-    if (spotifyController) {
-        try {
-            spotifyController.previousTrack();
-            console.log('Skipping to previous track');
-        } catch (error) {
-            console.log('Error skipping track:', error);
-        }
-    }
-}
-
-function skipToNext() {
-    if (spotifyController) {
-        try {
-            spotifyController.nextTrack();
-            console.log('Skipping to next track');
-        } catch (error) {
-            console.log('Error skipping track:', error);
-        }
-    }
-}
-
 // --- Spikeball Functions ---
 
 function ensureSpikeballCreated() {
@@ -403,21 +379,25 @@ const _initiateStripeCheckout = async (params) => {
         throw new Error(data.error || 'Unable to start checkout');
     }
 
-    const backHandler = () => {
-        console.log("Back button pressed during checkout, cancelling prompt.");
-        cancelCurrentPrompt();
-    };
-
     try {
-        updateBackButtonHandler(backHandler);
-        await prompt({
+        const result = await prompt({
             id: 'embedded_checkout_prompt',
             text: 'Complete your purchase',
             type: 'embedded_checkout',
             client_secret: data.client_secret
         });
+
+        // If the checkout was completed successfully, show a success message
+        if (result && result.status === 'answered' && result.value === 'completed') {
+            await prompt({
+                id: 'order-success-prompt',
+                text: 'Your order was successful!',
+                type: 'options',
+                options: [{ label: 'OK', value: 'ok' }]
+            });
+        }
     } finally {
-        unregisterBackButtonHandler();
+        // No manual pop needed, prompt() handles its own stack
     }
 
 
@@ -431,14 +411,7 @@ const guardedInitiateStripeCheckout = requireAuthAndSubscription(
 );
 
 const _checkoutProcess = async () => {
-    const backHandler = () => {
-        console.log("Back button pressed during checkout flow, cancelling prompt.");
-        cancelCurrentPrompt();
-    };
-
     try {
-        updateBackButtonHandler(backHandler);
-
         const result = await prompt({
             id: 'mockup-purchase-prompt',
             text: 'Froggo Tee ($20)',
@@ -471,7 +444,7 @@ const _checkoutProcess = async () => {
         await guardedInitiateStripeCheckout({ selectedSize });
 
     } finally {
-        unregisterBackButtonHandler();
+        // No manual pop needed
     }
 };
 
@@ -704,6 +677,7 @@ function showModeToggle() {
         modeToggleHandlersAttached = true;
         window.addEventListener('resize', positionModeToggle);
         window.addEventListener('scroll', positionModeToggle, { passive: true });
+        window.addEventListener('landinglayoutchange', positionModeToggle);
         window.addEventListener('modechange', (e) => {
             updateModeToggleImage(e.detail.mode);
             updateLandingElementsForMode(e.detail.mode);
@@ -774,12 +748,29 @@ export function initialize(dayOfYear, options = {}) {
     // Add resize listener to keep spotify embed positioned correctly
     window.addEventListener('resize', positionSpotifyEmbed);
     window.addEventListener('resize', positionTagline);
+    window.addEventListener('landinglayoutchange', () => {
+        positionSpotifyEmbed();
+        positionTagline();
+    });
 
     try { showModeToggle(); } catch (_) {}
     
     // Set initial visibility of landing page elements based on the current mode
     updateLandingElementsForMode(getSiteMode());
     
+    // Check for special cookie
+    import('/static/scripts/cookies.js').then(async (module) => {
+        const cookieData = module.check_and_cleanup_cookies();
+        if (cookieData) {
+            try {
+                const { showClaimMembershipButton } = await import('/static/scripts/special.js');
+                showClaimMembershipButton(cookieData);
+            } catch (e) {
+                console.error("Failed to load special button logic:", e);
+            }
+        }
+    });
+
     // Update legal year dynamically if present
     const legalYearEl = document.getElementById('legal-year');
     if (legalYearEl) {

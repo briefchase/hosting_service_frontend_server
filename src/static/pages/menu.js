@@ -9,15 +9,18 @@ export const menus = {};
 import {
     API_BASE_URL,
     updateSiteTitleVisibility,
-    updateAccountButtonVisibility
+    updateAccountButtonVisibility,
+    loadLandingView
 } from '/static/main.js'; // Updated import path
 import { displayAndPositionTooltip, hideTooltip, updateLastMouseEvent } from '/static/scripts/tooltip.js';
+import { pushBackHandler, popBackHandler, clearBackHandlers } from '/static/scripts/back.js';
 
 // Import the fetch handler - needed for auto-fetching on render
 // import { handleFetchResources } from './instance-menu.js'; // Keep this relative path assumption in mind
 
+import { getHandlers } from '/static/scripts/registry.js';
+
 // Store action handlers provided during initialization
-let actionHandlers = {};
 let menuContainerElement = null;
 let dynamicMenuTitleElement = null; // Renamed to avoid confusion with static site title
 let currentAuthState = null; // Store user authentication state
@@ -167,6 +170,9 @@ function generateMenuHTML(menuConfig, menuId) {
 // Function to render a specific menu
 // Exporting renderMenu in case action handlers need it directly
 export async function renderMenu(menuIdOrConfig) {
+    // Clear all existing back handlers when rendering a new menu
+    clearBackHandlers();
+    
     if (menuContainerElement) {
         delete menuContainerElement.dataset.loading;
         delete menuContainerElement.dataset.previousMenu;
@@ -270,23 +276,28 @@ export async function renderMenu(menuIdOrConfig) {
 
     // Update static header buttons based on current menu
     // Find buttons dynamically as they might be added/removed
-    const backButton = document.getElementById('back-button');
     const isAuthenticated = currentAuthState && !currentAuthState.guest;
 
-    if (backButton) {
-        if (menuConfig.backTarget) {
-            backButton.style.display = 'inline-block'; // Show back button
-            backButton.dataset.targetMenu = menuConfig.backTarget; // Set its target
-        } else if (menuId === 'dashboard-menu') {
-            // Special case: Show back button on main menu, but don't set target (handled by main.js)
-            backButton.style.display = 'inline-block';
-            delete backButton.dataset.targetMenu;
-        } else {
-            backButton.style.display = 'none'; // Hide back button
-            delete backButton.dataset.targetMenu;
-        }
+    if (menuConfig.backTarget) {
+        clearBackHandlers();
+        pushBackHandler(() => {
+            console.log(`Navigating (back) to menu: ${menuConfig.backTarget}`);
+            renderMenu(menuConfig.backTarget);
+        });
+    } else if (menuId === 'dashboard-menu') {
+        // Special case: Show back button on main menu, but don't set target (handled by main.js)
+        pushBackHandler(() => {
+            // Main JS will handle this case
+            console.log("🔙 Default menu navigation - returning to landing");
+            if (typeof loadLandingView === 'function') {
+                loadLandingView();
+            } else {
+                console.error("loadLandingView is not a function!", loadLandingView);
+                import('/static/main.js').then(m => m.loadLandingView && m.loadLandingView());
+            }
+        });
     } else {
-        console.warn("Back button not found during renderMenu");
+        clearBackHandlers();
     }
 
     // Centralized account button logic
@@ -319,7 +330,6 @@ export async function renderMenu(menuIdOrConfig) {
         listContainer.innerHTML = generateMenuHTML(menuConfig, menuId);
     } else {
         console.error("Could not find #menu-list-container within #menu-container.");
-        // Avoid overwriting the whole container, maybe show error differently
         menuContainerElement.innerHTML = '<p>Error: Menu structure incomplete.</p>'; 
     }
 
@@ -327,7 +337,6 @@ export async function renderMenu(menuIdOrConfig) {
     if (typeof menuConfig.onRender === 'function') {
         try {
             await menuConfig.onRender();
-            // Avoid immediate re-render to preserve listeners and clickability
         } catch (error) {
             console.error(`Error during onRender callback for menu "${menuId}":`, error);
         }
@@ -435,22 +444,8 @@ export function cleanupCurrentMenu() {
 // Re-apply header back button state based on the current menu configuration
 export function refreshHeaderButtonsForCurrentMenu() {
     try {
-        const backButton = document.getElementById('back-button');
         const isAuthenticated = currentAuthState && !currentAuthState.guest;
         const menuConfig = menus[currentMenuId];
-
-        if (backButton) {
-            if (menuConfig && menuConfig.backTarget) {
-                backButton.style.display = 'inline-block';
-                backButton.dataset.targetMenu = menuConfig.backTarget;
-            } else if (currentMenuId === 'dashboard-menu') {
-                backButton.style.display = 'inline-block';
-                delete backButton.dataset.targetMenu;
-            } else {
-                backButton.style.display = 'none';
-                delete backButton.dataset.targetMenu;
-            }
-        }
 
         const isLoading = menuContainerElement && menuContainerElement.dataset.loading === 'true';
 
@@ -467,7 +462,7 @@ export function refreshHeaderButtonsForCurrentMenu() {
 }
 
 // Exported function to initialize the menu
-export function initializeMenu(containerElement, handlers, userState) {
+export function initializeMenu(containerElement, userState) {
     if (!containerElement) {
         console.error("Menu container element is required for initialization.");
         return;
@@ -475,7 +470,6 @@ export function initializeMenu(containerElement, handlers, userState) {
     menuContainerElement = containerElement;
     // Search for the title element *within* the provided container
     dynamicMenuTitleElement = containerElement.querySelector('#menu-text'); 
-    actionHandlers = handlers || {};      // Store the provided handlers
     currentAuthState = userState;         // Store the user authentication state
 
     // The new tooltip.js module handles its own element creation.
@@ -586,26 +580,6 @@ export function initializeMenu(containerElement, handlers, userState) {
 
             const target = event.target;
 
-            // Handle static header buttons first
-            if (target.id === 'back-button') {
-                if (menuContainerElement && menuContainerElement.dataset.loading === 'true') {
-                    // If loading, cancel and restore the previous menu
-                    console.log('Back clicked during loading, restoring previous menu.');
-                    const previousMenuId = menuContainerElement.dataset.previousMenu;
-                    if (previousMenuId) {
-                        renderMenu(previousMenuId);
-                    }
-                    // The renderMenu call will clear the loading state attributes and status
-                    return; 
-                }
-                
-                if (target.dataset.targetMenu) {
-                    console.log(`Navigating (back) to menu: ${target.dataset.targetMenu}`);
-                    renderMenu(target.dataset.targetMenu);
-                    return; // Handled
-                }
-            }
-
             // Account button clicks are now handled differently:
             // - If text is 'authenticate', main.js listener handles it.
             // - If text is 'account', it has data-target-menu, so this listener handles it.
@@ -625,16 +599,16 @@ export function initializeMenu(containerElement, handlers, userState) {
             const resourceId = li.dataset.resourceId;
             const directive = li.dataset.directive;
             const returnPage = li.dataset.returnPage;
-            const returnMenu = li.dataset.returnMenu;
+                const returnMenu = li.dataset.returnMenu;
 
-            if (targetMenu) {
-                // Clear status before navigating to a new menu
-                try { clearStatusDisplay(); } catch (_) {}
-                console.log(`Navigating to menu: ${targetMenu}`);
-                renderMenu(targetMenu);
-            } else if (action) {
-                // --- Generic Loading UI ---
-                if (li.dataset.showLoading === 'true') {
+                if (targetMenu) {
+                    // Clear status before navigating to a new menu
+                    try { clearStatusDisplay(); } catch (_) {}
+                    console.log(`Navigating to menu: ${targetMenu}`);
+                    renderMenu(targetMenu);
+                } else if (action) {
+                    // --- Generic Loading UI ---
+                    if (li.dataset.showLoading === 'true') {
                     // Hide menu items
                     if (menuContainerElement) {
                         const listContainer = menuContainerElement.querySelector('#menu-list-container');
@@ -654,6 +628,13 @@ export function initializeMenu(containerElement, handlers, userState) {
                         menuContainerElement.dataset.loading = "true";
                         menuContainerElement.dataset.previousMenu = currentMenuId;
                     }
+                    
+                    // Push a back handler to handle cancelling the loading state
+                    const previousMenuId = currentMenuId;
+                    pushBackHandler(() => {
+                        console.log('Back clicked during loading, restoring previous menu.');
+                        renderMenu(previousMenuId);
+                    });
                 }
 
                 // Construct params object by collecting all data attributes from the element
@@ -666,9 +647,14 @@ export function initializeMenu(containerElement, handlers, userState) {
                 params.menuTitle = dynamicMenuTitleElement;
                 
                 console.log(`Action triggered: ${action} with params:`, params);
-                // Call the appropriate handler from the provided map
+                
+                // Call the appropriate handler from the central registry
+                const actionHandlers = getHandlers();
                 if (actionHandlers[action]) {
                     try {
+                        // Clear status message just before executing the action
+                        clearStatusDisplay();
+                        
                         // Pass the constructed params object
                         await actionHandlers[action](params);
                     } catch (error) {
@@ -686,11 +672,16 @@ export function initializeMenu(containerElement, handlers, userState) {
                             if (previousMenuId) {
                                 renderMenu(previousMenuId);
                             }
-                            updateStatusDisplay(`Error: ${error.message}`, 'error');
+                            // If it's a known Auth guard error, just exit, as requireAuth handles it
+                            if (error.message !== 'ReauthInitiated') {
+                                updateStatusDisplay(`Error: ${error.message || 'Action failed.'}`, 'error');
+                            }
                         }
                     } finally {
-                        // Action handlers are now responsible for setting the final title.
-                        // We no longer need to generically remove rainbow text.
+                        // We do however pop the temporary "loading" back handler
+                        if (li.dataset.showLoading === 'true') {
+                            popBackHandler();
+                        }
                     }
                 } else {
                     console.warn(`No handler found for action: ${action}`);

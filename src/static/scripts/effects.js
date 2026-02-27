@@ -1,27 +1,66 @@
 /**
  * Finds all elements with the 'rainbow-text' class and wraps each letter
  * in a span to create a staggered animation effect.
+ * @param {HTMLElement} [root=document] - The root element to search within.
  */
-export function initializeRainbowText() {
-    const rainbowElements = document.querySelectorAll('.rainbow-text');
+export function initializeRainbowText(root = document) {
+    const rainbowElements = root.querySelectorAll('.rainbow-text');
     rainbowElements.forEach(el => {
-        // Prevent re-initializing the same element
-        if (el.dataset.rainbowInitialized) return;
-        el.dataset.rainbowInitialized = 'true';
-
-        const text = el.textContent;
-        el.innerHTML = ''; // Clear original text
-        for (let i = 0; i < text.length; i++) {
-            const char = text[i];
-            const span = document.createElement('span');
-            span.textContent = char;
-            // Add a staggered delay, cycling every 2 seconds to match the animation
-            span.style.animationDelay = `${(i * 0.1) % 2}s`;
-            el.appendChild(span);
-        }
-        // Fade the text in now that it's styled
-        el.style.opacity = '1';
+        applyRainbowEffect(el);
     });
+}
+
+/**
+ * Applies the rainbow staggered animation effect to a single element.
+ * @param {HTMLElement} el - The element to apply the effect to.
+ */
+export function applyRainbowEffect(el) {
+    if (!el || el.dataset.rainbowInitialized) return;
+    el.dataset.rainbowInitialized = 'true';
+
+    const text = el.textContent;
+    el.innerHTML = ''; // Clear original text
+    for (let i = 0; i < text.length; i++) {
+        const char = text[i];
+        const span = document.createElement('span');
+        span.textContent = char;
+        // Add a staggered delay, cycling every 2 seconds to match the animation
+        span.style.animationDelay = `${(i * 0.1) % 2}s`;
+        el.appendChild(span);
+    }
+    // Fade the text in now that it's styled
+    el.style.opacity = '1';
+}
+
+/**
+ * Applies a staggered wave animation effect to a single element.
+ * @param {HTMLElement} el - The element to apply the effect to.
+ */
+export function applyWaveEffect(el) {
+    if (!el || el.dataset.waveInitialized) return;
+    el.dataset.waveInitialized = 'true';
+
+    const text = el.textContent;
+    el.innerHTML = ''; // Clear original text
+    
+    // Get a common reference time for all letters
+    const startTime = performance.now() / 1000;
+
+    for (let i = 0; i < text.length; i++) {
+        const char = text[i];
+        const span = document.createElement('span');
+        span.textContent = char === ' ' ? '\u00A0' : char; // Handle spaces
+        span.style.display = 'inline-block';
+        
+        // Calculate a negative delay based on index so they are already in motion
+        // and staggered relative to each other, but all synced to the same clock.
+        const staggerDelay = i * 0.1;
+        span.style.animation = `wave 2s ease-in-out infinite`;
+        span.style.animationDelay = `-${staggerDelay}s`;
+        
+        el.appendChild(span);
+    }
+    el.style.opacity = '1';
 }
 
 export class TextScramble {

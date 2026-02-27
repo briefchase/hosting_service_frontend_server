@@ -69,6 +69,7 @@ export function configureAuthSuccessCallback(callbackFn) {
  * @param {object} userSession The user session object from the backend.
  */
 async function handleAuthenticationSuccess(userSession) {
+    window.__reauthInProgress = false; // Clear re-auth state
     // Run the immediate success callback if it's configured
     if (onAuthSuccessCallback) {
         try {
@@ -87,7 +88,9 @@ async function handleAuthenticationSuccess(userSession) {
         console.log('Re-executing interrupted action after successful reauth');
         try {
             // Re-execute the stored action.
-            await pendingAction.actionFn(pendingAction.params);
+            // Ensure we use the latest params, but preserve the original ones if needed.
+            const executionParams = { ...pendingAction.params };
+            await pendingAction.actionFn(executionParams);
         } catch (error) {
             console.error('Error re-executing pending action:', error);
             // Fall back to default redirect if the pending action fails
@@ -215,10 +218,12 @@ export function initializeGoogleSignIn(statusContainer) {
                         });
                         await handleAuthResponse(backendResponse, statusContainer);
                     } catch (error) {
+                        window.__reauthInProgress = false; // Clear re-auth state
                         console.error('Network or other error sending code to backend:', error);
                         updateAuthStatus(statusContainer, 'Network error communicating with server. Please try again.', 'error');
                     }
                 } else {
+                    window.__reauthInProgress = false; // Clear re-auth state
                     // Handle user closing the popup gracefully
                     if (response.error === 'popup_closed' || response.error === 'popup_closed_by_user') {
                         console.log('Google Sign-In popup closed by user.');
@@ -231,6 +236,7 @@ export function initializeGoogleSignIn(statusContainer) {
                 }
             },
             error_callback: (error) => {
+                window.__reauthInProgress = false; // Clear re-auth state
                 // Don't show an error if the user closed the popup
                 if (error.type === 'popup_closed') {
                     console.log('Google Sign-In popup closed by user.');
@@ -286,38 +292,96 @@ export function getUser() {
 }
 
 /**
- * A higher-order function that wraps an action with authentication and subscription checks.
- * @param {Function} actionFn The async function to execute if all checks pass. It will receive the `params` object.
- * @param {string} actionName A user-friendly name for the action, used in status messages (e.g., "view sites").
+ * Triggers the re-authentication flow and updates the UI.
+ * Fails spectacularly if the UI cannot be initialized.
+ */
+export async function initiateReauthUI(params = {}) {
+    // Prevent multiple concurrent reauth popups
+    if (window.__reauthInProgress) {
+        console.log("[Auth] Re-authentication already in progress, skipping UI trigger.");
+        return;
+    }
+    window.__reauthInProgress = true;
+
+    let { updateStatusDisplay: statusFn, menuContainer } = params;
+
+    if (!statusFn) {
+        // Fallback to finding the element directly
+        const statusEl = document.getElementById('menu-status-message');
+        if (statusEl) {
+            statusFn = (msg, type) => {
+                statusEl.textContent = msg;
+                statusEl.className = `menu-status-message menu-status-${type}`;
+            };
+        }
+    }
+
+    const message = 'please sign in to continue';
+    if (statusFn) {
+        statusFn(message, 'info');
+    } else {
+        // Fallback to finding the element directly if statusFn is missing
+        const statusEl = document.getElementById('menu-status-message');
+        if (statusEl) {
+            statusEl.textContent = message;
+            statusEl.className = 'menu-status-message menu-status-info';
+        } else {
+            // Fail spectacularly if we can't even tell the user to sign in
+            const error = new Error("CRITICAL: UI status element missing. Cannot display sign-in prompt.");
+            console.error(error);
+            throw error;
+        }
+    }
+
+    // Register a back button handler to cancel the re-auth flow
+    const { pushBackHandler, clearBackHandlers } = await import('/static/scripts/back.js');
+    const { renderMenu } = await import('/static/pages/menu.js');
+    const backHandler = () => {
+        console.log("[Auth] Back button pressed during re-auth, cancelling.");
+        window.__reauthInProgress = false;
+        window.pendingReauthAction = null;
+        
+        // Restore the previous menu if possible, or go to dashboard
+        if (menuContainer && menuContainer.dataset.previousMenu) {
+            renderMenu(menuContainer.dataset.previousMenu);
+        } else {
+            renderMenu('dashboard-menu');
+        }
+    };
+    pushBackHandler(backHandler);
+
+    // Determine where to attach the Google popup
+    const isLandingPage = !!document.getElementById('landing-view-container');
+    const statusContainer = isLandingPage ? null : (menuContainer?.querySelector('#menu-status-message') || document.getElementById('menu-status-message') || document.getElementById('prompt-container') || document.body);
+
+    initializeGoogleSignIn(statusContainer);
+    triggerGoogleSignIn(statusContainer);
+}
+
+/**
+ * A higher-order function that wraps an action with an authentication check.
+ * @param {Function} actionFn The async function to execute if authentication passes.
+ * @param {string} actionName A user-friendly name for the action.
  * @returns {Function} An async function that takes a `params` object and executes the guarded action.
  */
-export function requireAuthAndSubscription(actionFn, actionName, options = {}) {
-    const { skipSubscriptionCheck } = options || {};
-
-    // DRY helper for triggering a re-authentication flow. It is self-contained.
-    const _initiateReauth = (guardedFn, params) => {
-        const { updateStatusDisplay } = params || {};
-        
-        // Use a consistent message for both initial sign-in and re-auth.
-        const message = 'please sign in to continue';
-        if (updateStatusDisplay) {
-            updateStatusDisplay(message, 'info');
-        }
-
+export function requireAuth(actionFn, actionName) {
+    // DRY helper for triggering a re-authentication flow.
+    const _initiateReauth = async (guardedFn, params) => {
         // Store the original action for re-execution after successful auth.
         // This *always* overwrites any previously pending action.
         if (typeof window !== 'undefined') {
             console.log("Setting pending re-authentication action:", { actionFn: guardedFn, params });
             window.pendingReauthAction = { actionFn: guardedFn, params };
         }
+
+        // Ensure we pass the correct context to the UI trigger
+        await initiateReauthUI(params);
     };
 
     const guarded = async function(params) {
-        // Destructure all required functions and elements from params
-        let { menuContainer, renderMenu, updateStatusDisplay, skipSubscription } = params || {};
+        let { menuContainer, updateStatusDisplay } = params || {};
 
         if (!updateStatusDisplay) {
-            // Fallback for when no UI status updater is provided.
             updateStatusDisplay = (message, type = 'info') => {
                 console[type === 'error' ? 'error' : 'log'](`[Auth Guard] ${message}`);
             };
@@ -325,71 +389,107 @@ export function requireAuthAndSubscription(actionFn, actionName, options = {}) {
 
         const user = getUser();
 
-        // 1. Authentication Check
         if (!user) {
-            _initiateReauth(guarded, params);
-            
-            const isLandingPage = !!document.getElementById('landing-view-container');
-            let statusContainer = isLandingPage ? null : (menuContainer?.querySelector('#menu-status-message') || menuContainer || document.getElementById('prompt-container') || document.body);
-
-            initializeGoogleSignIn(statusContainer);
-            triggerGoogleSignIn(statusContainer);
+            console.log("[Auth Guard] No user found in sessionStorage, initiating reauth.");
+            await _initiateReauth(guarded, params);
             return;
         }
 
+        console.log("[Auth Guard] User found, proceeding with action.");
+
         try {
-            // 2. Subscription Check (conditional)
-            if (!skipSubscription && !skipSubscriptionCheck) {
-                updateStatusDisplay("checking subscription...", "info");
-                const response = await fetchWithAuth(`${API_BASE_URL}/subscription-status`);
-                if (!response.ok) {
-                    const errorData = await response.json().catch(() => ({}));
-                    throw new Error(`failed to fetch subscription status: ${errorData.error || response.statusText}`);
-                }
-                const subscriptionData = await response.json();
-                if (subscriptionData.status !== 'active') {
-                    const { initializeStripe, handleSubscribe } = await import('/static/menus/subscription.js');
-                    const { updateBackButtonHandler, unregisterBackButtonHandler } = await import('/static/main.js');
-                    const { cancelCurrentPrompt } = await import('/static/pages/prompt.js');
-                    const backHandler = () => {
-                        cancelCurrentPrompt();
-                        if (renderMenu && menuContainer && menuContainer.dataset.previousMenu) {
-                            renderMenu(menuContainer.dataset.previousMenu);
-                        }
-                    };
-                    updateBackButtonHandler(backHandler);
-                    try {
-                        await initializeStripe();
-                        await handleSubscribe();
-                    } finally {
-                        unregisterBackButtonHandler();
-                    }
-                    return;
-                }
-            }
-
-            // 4. All checks passed, execute the original action
-            await actionFn(params);
-
+            return await actionFn(params);
         } catch (error) {
-            // If the error is the specific 'project_not_initialized' error,
-            // re-throw it so the central UI handler in menu.js can catch it without logging a console error here.
-            if (error.id === 'project_not_initialized') {
-                throw error;
-            }
-
-            console.error(`Error during guarded action for ${actionName}:`, error);
-            
             if (error && error.message === 'ReauthInitiated') {
-                _initiateReauth(guarded, params);
+                await _initiateReauth(guarded, params);
                 return;
             }
+            throw error;
+        }
+    };
+    return guarded;
+}
+
+/**
+ * A higher-order function that wraps an action with a subscription check.
+ * Assumes authentication has already been verified.
+ * @param {Function} actionFn The async function to execute if subscription is active.
+ * @returns {Function} An async function that takes a `params` object and executes the guarded action.
+ */
+export function requireSubscription(actionFn) {
+    return async function(params) {
+        let { menuContainer, renderMenu, updateStatusDisplay, skipSubscription } = params || {};
+
+        if (!updateStatusDisplay) {
+            updateStatusDisplay = (message, type = 'info') => {
+                console[type === 'error' ? 'error' : 'log'](`[Subscription Guard] ${message}`);
+            };
+        }
+
+        if (skipSubscription) {
+            return await actionFn(params);
+        }
+
+        updateStatusDisplay("checking subscription...", "info");
+        try {
+            console.log("[Subscription Guard] Fetching subscription status...");
+            const response = await fetchWithAuth(`${API_BASE_URL}/subscription-status`);
             
+            // If fetchWithAuth threw ReauthInitiated, this code won't run.
+            // If it returned a non-ok response, handle it.
+            if (!response.ok) {
+                const errorData = await response.json().catch(() => ({}));
+                throw new Error(`failed to fetch subscription status: ${errorData.error || response.statusText}`);
+            }
+            const subscriptionData = await response.json();
+            if (subscriptionData.status !== 'active') {
+                const { initializeStripe, handleSubscribe } = await import('/static/menus/subscription.js');
+                try {
+                    await initializeStripe();
+                    // Pass the actionFn and params so handleSubscribe can resume the action
+                    await handleSubscribe(actionFn, params);
+                } catch (error) {
+                    console.error("Subscription flow failed:", error);
+                }
+                return;
+            }
+            return await actionFn(params);
+        } catch (error) {
+            if (error && error.message === 'ReauthInitiated') {
+                // Re-throw so the outer requireAuth guard can catch it and save the pending action
+                throw error;
+            }
+            console.error(`Error during subscription check:`, error);
+            // Do not set the status display to technical internal errors like ReauthInitiated
+            // Only show actual business logic errors.
             updateStatusDisplay(`unable to verify subscription: ${error.message}`, "error");
             return;
         }
     };
-    return guarded;
+}
+
+/**
+ * A higher-order function that wraps an action with both authentication and subscription checks.
+ * @param {Function} actionFn The async function to execute if all checks pass.
+ * @param {string} actionName A user-friendly name for the action.
+ * @returns {Function} An async function that takes a `params` object and executes the guarded action.
+ */
+export function requireAuthAndSubscription(actionFn, actionName, options = {}) {
+    const { skipSubscriptionCheck } = options || {};
+    
+    // First require authentication
+    const authGuarded = requireAuth(async (params) => {
+        console.log(`[Auth Guard] Auth confirmed for ${actionName}, checking subscription...`);
+        // Then require subscription (if not skipped)
+        if (skipSubscriptionCheck) {
+            return await actionFn(params);
+        }
+        const subGuarded = requireSubscription(actionFn);
+        // Ensure we pass the latest params to the subscription guard
+        return await subGuarded(params);
+    }, actionName);
+
+    return authGuarded;
 }
 
 // Note: These functions are now globally accessible.

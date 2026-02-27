@@ -1,17 +1,17 @@
 import { menus } from '/static/pages/menu.js';
+import { registerHandler } from '../scripts/registry.js';
 import { requireAuthAndSubscription } from '/static/scripts/authenticate.js';
 import { 
     fetchWithAuth, 
     API_BASE_URL,
     loadConsoleView,
-    updateBackButtonHandler,
-    unregisterBackButtonHandler,
     updateAccountButtonVisibility,
-    updateSiteTitleVisibility,
-    returnFromTerminal
+    updateSiteTitleVisibility
 } from '/static/main.js';
-import { fetchSites } from '/static/scripts/utilities.js';
-import { prompt, cancelCurrentPrompt, clearPromptStack } from '/static/pages/prompt.js';
+import { loadTerminalView, returnFromTerminal } from '/static/pages/terminal.js';
+import { pushBackHandler } from '/static/scripts/back.js';
+import { fetchSites } from '/static/scripts/api.js';
+import { prompt, clearPromptStack } from '/static/pages/prompt.js';
 import { establishWebSocketConnection } from '/static/scripts/socket.js';
 
 
@@ -37,34 +37,39 @@ function _cancelActiveRestore(reason, statusMessage) {
     
     const { ws, deploymentId } = activeRestore;
 
-    if (ws && ws.readyState < WebSocket.CLOSING) {
-        try {
-            if (ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({
-                    action: "cancel_deployment", // The backend uses the same cancel action
-                    deployment_id: deploymentId,
-                    reason: reason
-                }));
+    if (ws) {
+        // Clear the onmessage handler BEFORE closing
+        ws.onmessage = null;
+
+        if (ws.readyState < WebSocket.CLOSING) {
+            try {
+                if (ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify({
+                        action: "cancel_deployment", // The backend uses the same cancel action
+                        deployment_id: deploymentId,
+                        reason: reason
+                    }));
+                }
+                ws.close();
+            } catch (e) {
+                console.warn('Error during WebSocket cleanup:', e);
             }
-            ws.close();
-        } catch (e) {
-            console.warn('Error during WebSocket cleanup:', e);
         }
     }
-
-    unregisterBackButtonHandler();
-    cancelCurrentPrompt();
-    clearPromptStack();
 
     // On success, go to resources menu. On failure/cancel, go back to backup menu.
     const targetMenu = (reason === 'restore_complete') ? 'resources-menu' : 'backup-menu';
     const messageType = (reason === 'restore_complete') ? 'success' : 'info';
 
     const params = { 
-        menuId: targetMenu, 
-        output: statusMessage || 'Restore process ended.', 
-        type: messageType
+        menuId: targetMenu
     };
+    
+    // Only include message if it's a successful completion
+    if (reason === 'restore_complete') {
+        params.output = statusMessage || 'Restore process ended.';
+        params.type = messageType;
+    }
     
     // If the terminal is active, we need to exit it cleanly first
     if (document.body.classList.contains('terminal-view-active')) {
@@ -400,9 +405,8 @@ async function _communicateRestore(ws, params) {
     let terminalApi = null;
     const terminalQueue = [];
 
-    const restoreBackButtonHandler = () => {
-        unregisterBackButtonHandler();
-        prompt({
+    const restoreBackButtonHandler = async () => {
+        const result = await prompt({
             text: "Are you sure you want to exit this restore?",
             type: 'options',
             options: [
@@ -410,16 +414,15 @@ async function _communicateRestore(ws, params) {
                 { label: 'no', value: false }
             ],
             id: 'restore_exit_confirm'
-        }).then(result => {
-            if (result && result.status === 'answered' && result.value === true) {
-                _cancelActiveRestore("user_cancelled_via_prompt", "Restore cancelled by user.");
-            } else {
-                updateBackButtonHandler(restoreBackButtonHandler);
-            }
         });
+
+        if (result && result.status === 'answered' && result.value === true) {
+            clearPromptStack();
+            _cancelActiveRestore("user_cancelled_via_prompt", "Restore cancelled by user.");
+        }
     };
     
-    updateBackButtonHandler(restoreBackButtonHandler);
+    pushBackHandler(restoreBackButtonHandler);
 
     ws.onmessage = async (event) => {
         try {
@@ -473,7 +476,10 @@ async function _communicateRestore(ws, params) {
         }
 
         try {
-            const answer = await prompt(payload);
+            const answer = await prompt({
+                ...payload,
+                noBackHandler: true
+            });
             ws.send(JSON.stringify({
                 status: answer.status,
                 value: answer.value
@@ -507,8 +513,6 @@ async function _communicateRestore(ws, params) {
                 const siteId = result.context.site_id;
                 console.log(`Transitioning to view site: ${siteId}`);
                 
-                unregisterBackButtonHandler();
-                clearPromptStack();
                 activeRestore.ws = null;
                 activeRestore.deploymentId = null;
                 document.body.classList.remove('deployment-loading');
@@ -518,10 +522,9 @@ async function _communicateRestore(ws, params) {
 
             } else {
                 // User clicked OK. Leave them in the terminal.
-                clearPromptStack();
                 
                 // Set a simple back button to return to the menu.
-                updateBackButtonHandler(() => returnFromTerminal({ menuId: 'backup-menu' }));
+                // pushBackHandler(() => returnFromTerminal({ menuId: 'backup-menu' }));
 
                 // Re-enable terminal input to signal completion.
                 if (terminalApi) {
@@ -544,7 +547,7 @@ async function _communicateRestore(ws, params) {
         document.body.classList.remove('deployment-loading');
         
         try {
-            const { loadTerminalView } = await import('/static/main.js');
+            const { loadTerminalView } = await import('/static/pages/terminal.js');
             terminalApi = await loadTerminalView({
                 existingWs: ws,
                 hideInput: true
@@ -743,6 +746,15 @@ export const promptBackupSchedule = requireAuthAndSubscription(
     _promptBackupSchedule,
     "schedule a backup"
 );
+
+// Register handlers with the central registry
+registerHandler('listDeploymentsForBackup', listDeploymentsForBackup);
+registerHandler('createScriptBackup', createScriptBackup);
+registerHandler('showRestoreMenu', showRestoreMenu);
+registerHandler('selectMachineForRestore', selectMachineForRestore);
+registerHandler('confirmRestore', confirmRestore);
+registerHandler('showScheduleMenu', showScheduleMenu);
+registerHandler('promptBackupSchedule', promptBackupSchedule);
 
 // --- MENU CONFIG ---
 

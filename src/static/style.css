@@ -288,6 +288,21 @@ body.prompt-overlay-active #console-container {
     /* text-decoration: none; Ensure no underline */
 }
 
+/* Special hover for the membership button */
+#claim-membership-button:hover {
+    background: linear-gradient(45deg, #ff0000, #ff7300, #fffb00, #48ff00, #00ffd5, #002bff, #7a00ff, #ff00c8, #ff0000);
+    background-size: 200% 200%;
+    animation: rainbow-bg-shift 3s linear infinite;
+    color: white !important;
+    border-color: transparent;
+    transition: background-color 0.5s ease;
+}
+
+@keyframes rainbow-bg-shift {
+    0% { background-position: 0% 50%; }
+    100% { background-position: 200% 50%; }
+}
+
 /* Google Verification Notice */
 .google-verification-notice {
     color: #888888; /* Grey color for notice */
@@ -642,6 +657,15 @@ body.prompt-overlay-active #console-container {
     100% { color: red; }
 }
 
+@keyframes wave {
+    0%, 100% {
+        transform: translateY(-2px);
+    }
+    50% {
+        transform: translateY(2px);
+    }
+}
+
 /* Mockup pulse animation */
 @keyframes mockupPulse {
     0%, 100% {
@@ -871,10 +895,9 @@ body.prompt-overlay-active {
 }
 
 /* Terminal Styles */
-#terminal-view {
+.terminal-container {
     width: 100%;
-    max-width: 1200px; /* Max width for large screens */
-    height: calc(100vh - (2 * var(--header-height))); /* Fill the container */
+    height: 100%;
     background-color: black;
     color: white;
     font-family: 'Courier New', Courier, monospace;
@@ -988,16 +1011,20 @@ body.prompt-overlay-active {
 
 /* Terminal view specific body styles */
 body.terminal-view-active #console-container {
-    padding-top: var(--header-height);
-    padding-bottom: var(--header-height);
-    padding-left: 20px;
-    padding-right: 20px;
+    position: fixed;
+    top: var(--header-height, 56px);
+    bottom: var(--header-height, 56px);
+    left: 20px;
+    right: 20px;
+    padding: 0;
+    margin: 0;
     box-sizing: border-box;
     display: flex;
     justify-content: center;
     align-items: center;
-    height: auto; /* Let flexbox control height */
-    flex-grow: 1; /* Ensure it fills space */
+    width: auto;
+    height: auto;
+    flex-grow: 0; /* Reset flex-grow since we're using fixed positioning */
 }
 
 @keyframes hover-up-down {

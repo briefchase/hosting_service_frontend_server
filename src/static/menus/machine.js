@@ -1,6 +1,7 @@
 import { menus, renderMenu, updateStatusDisplay } from '/static/pages/menu.js';
+import { registerHandler } from '../scripts/registry.js';
 import { requireAuthAndSubscription } from '/static/scripts/authenticate.js';
-import { fetchSites as apiFetchSites } from '/static/scripts/utilities.js';
+import { fetchSites as apiFetchSites } from '/static/scripts/api.js';
 import {
     API_BASE_URL,
     fetchWithAuth,
@@ -221,3 +222,8 @@ export const renameMachine = requireAuthAndSubscription(async (params) => {
 });
 
 export const listMachines = requireAuthAndSubscription(_listMachinesLogic, 'view machines');
+
+// Register handlers with the central registry
+registerHandler('listMachines', listMachines);
+registerHandler('destroyMachine', destroyMachine);
+registerHandler('renameMachine', renameMachine);

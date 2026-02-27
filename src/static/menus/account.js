@@ -1,5 +1,6 @@
 // Import the central menu registry
 import { menus } from '/static/pages/menu.js';
+import { registerHandler } from '../scripts/registry.js';
 import { fetchWithAuth, API_BASE_URL } from '/static/main.js';
 import { prompt } from '/static/pages/prompt.js';
 
@@ -27,18 +28,20 @@ export const handleRescind = async () => {
         } else {
             const errorData = await response.json().catch(() => ({}));
             console.error("Server rescind failed:", response.status, errorData.error || 'Unknown error');
-            // Inform the user, but still log them out locally.
-            alert("Could not rescind Google access, but you will be logged out. Please revoke access manually in your Google account settings.");
+            // Inform the user via console, but still log them out locally.
+            console.warn("Could not rescind Google access, but you will be logged out. Please revoke access manually in your Google account settings.");
         }
     } catch (error) {
         console.error("Error during rescind request:", error);
-         alert("An error occurred. Please try again.");
     } finally {
         // Always clear local session and redirect
         sessionStorage.removeItem('currentUser');
         window.location.href = '/landing.html';
     }
 };
+
+// Register handlers with the central registry
+registerHandler('handleRescind', handleRescind);
 
 // Define Account Menu Configuration
 const accountMenuConfig = {

@@ -1,7 +1,8 @@
 import { fetchWithAuth, API_BASE_URL } from '/static/main.js';
 import { getUser, clearPendingReauthAction } from '/static/scripts/authenticate.js';
-import { purchaseDomain as apiPurchaseDomain, checkDomainAvailability as apiCheckDomainAvailability } from '/static/scripts/domains.js';
+import { checkDomainAvailability as apiCheckDomainAvailability } from '/static/scripts/domains.js';
 import { openPopup } from '/static/scripts/popup.js';
+import { pushBackHandler, popBackHandler } from '/static/scripts/back.js';
 
 // --- Prompt Mode Management ---
 
@@ -10,7 +11,7 @@ import { openPopup } from '/static/scripts/popup.js';
  * @param {object} [options={}] - Options for entering prompt mode.
  * @param {boolean} [options.dim=true] - Whether to apply the dimming effect.
  */
-function enterPromptMode(options = {}) {
+function _enterPromptMode(options = {}) {
     const { dim = true } = options;
     document.body.classList.add('prompt-active', 'prompt-overlay-active');
     if (!dim) {
@@ -22,7 +23,7 @@ function enterPromptMode(options = {}) {
 /**
  * Exits prompt mode: restores the background and cleans up body classes.
  */
-function exitPromptMode() {
+function _exitPromptMode() {
     document.body.classList.remove('prompt-active', 'prompt-overlay-active', 'prompt-no-dim');
     document.documentElement.classList.remove('prompt-overlay-active');
 }
@@ -30,7 +31,8 @@ function exitPromptMode() {
 
 let isPrompting = false;
 let promptStack = [];
-let currentResolve = null; // No longer exported
+let activePromptStack = []; // Track prompts that are currently "underneath" the active one
+let currentResolve = null; 
 let debounceTimer;
 let currentPromptConfig = {};
 let embeddedCheckoutRef = null; // Track active Stripe Embedded Checkout
@@ -38,7 +40,7 @@ let embeddedCheckoutRef = null; // Track active Stripe Embedded Checkout
 document.addEventListener('DOMContentLoaded', () => {
 });
 
-function debounce(func, delay) {
+function _debounce(func, delay) {
     return function(...args) {
         clearTimeout(debounceTimer);
         debounceTimer = setTimeout(() => func.apply(this, args), delay);
@@ -46,13 +48,13 @@ function debounce(func, delay) {
 }
 
 // Safely decode possible HTML entities then allow only specific simple tags
-function decodeHtmlEntities(str) {
+function _decodeHtmlEntities(str) {
     const textarea = document.createElement('textarea');
     textarea.innerHTML = str;
     return textarea.value;
 }
 
-function sanitizeAllowedInlineHtml(html) {
+function _sanitizeAllowedInlineHtml(html) {
     const container = document.createElement('div');
     container.innerHTML = html;
     // Remove all tags except span
@@ -70,99 +72,10 @@ function sanitizeAllowedInlineHtml(html) {
     return container.innerHTML;
 }
 
-async function handleDomainPurchase(domainName, price, projectId, privacy, domainPromptResolver, phoneNumber = null) {
-    console.log(`[Domain Purchase] Attempting to purchase ${domainName} for $${price} in project ${projectId} with privacy ${privacy}`);
-    const user = getUser();
-    if (!user || !user.token) {
-        console.error("[Domain Purchase] User not authenticated.");
-        return;
-    }
+// REMOVED handleDomainPurchase 
 
-    try {
-        const apiResult = await apiPurchaseDomain({
-            domainName,
-            price,
-            projectId,
-            privacy,
-            token: user.token,
-            phoneNumber // This will be null on the first call.
-        });
-
-        if (apiResult.ok) {
-            console.log("[Domain Purchase] Success:", apiResult.result);
-            domainPromptResolver({ status: 'answered', value: domainName });
-            return;
-        }
-
-        if (apiResult.status === 428 && apiResult.error === 'phone_number_required') {
-            console.log("[Domain Purchase] Phone number required. Prompting user.");
-            // This part is the first time we ask for the number.
-            const promptResult = await prompt({
-                id: 'phone_number_prompt',
-                text: 'A phone number is required for domain registration. Please enter it below.',
-                type: 'phone',
-                required: true
-            });
-
-            if (promptResult.status === 'answered' && promptResult.value) {
-                // Here we recurse with the phone number.
-                return handleDomainPurchase(domainName, price, projectId, privacy, domainPromptResolver, promptResult.value);
-            } else {
-                // User cancelled the very first phone prompt.
-                domainPromptResolver({ status: 'canceled', value: null });
-                return;
-            }
-        }
-
-        // Any other error from the API call.
-        throw new Error(apiResult.error || `Server returned ${apiResult.status}`);
-
-    } catch (error) {
-        console.error("[Domain Purchase] Error:", error);
-
-        // PRIORITIZE THIS CHECK: If the failure happened after a phone number was submitted,
-        // assume the phone number might be the issue and re-prompt.
-        if (phoneNumber) { // phoneNumber is now an object { countryCode, number }
-            const retryPrompt = await prompt({
-                id: 'phone_number_prompt_retry',
-                text: `An error occurred: ${error.message}. Please check your phone number and try again.`,
-                type: 'phone',
-                required: true,
-                defaultValue: phoneNumber // Pass the object as the default value
-            });
-
-            if (retryPrompt.status === 'answered' && retryPrompt.value) {
-                // User entered a new number, recurse again.
-                return handleDomainPurchase(domainName, price, projectId, privacy, domainPromptResolver, retryPrompt.value);
-            } else {
-                // User cancelled the retry prompt.
-                domainPromptResolver({ status: 'canceled', value: null });
-                return;
-            }
-        }
-
-        // If the error is a re-auth signal on the FIRST attempt, let the auth wrapper handle it.
-        if (error.message === 'ReauthInitiated') {
-            console.log("[Domain Purchase] Re-authentication initiated. Halting purchase flow.");
-            // Don't resolve the original prompt; the page will be redirected for re-auth.
-            return;
-        }
-
-        // The error occurred on the initial attempt, before a phone number was even requested.
-        // This is a non-phone-related error. Just show it and cancel.
-        await prompt({
-            id: 'domain_purchase_generic_error',
-            text: `An unexpected error occurred: ${error.message}`,
-            type: 'options',
-            options: ['OK']
-        });
-        domainPromptResolver({ status: 'canceled', value: null });
-        return;
-    }
-}
-
-async function handleDomainAvailabilityCheck(domainName, inputElement, priceDisplay, buttonWrapper, projectId) {
-    console.log(`[Domain Check] Checking availability for: ${domainName} in project ${projectId}`);
+async function _handleDomainAvailabilityCheck(domainName, inputElement, priceDisplay, buttonWrapper, resolve) {
+    console.log(`[Domain Check] Checking availability for: ${domainName}`);
     const user = getUser();
     if (!user || !user.token) {
         console.error("[Domain Check] User not authenticated.");
@@ -188,50 +101,38 @@ async function handleDomainAvailabilityCheck(domainName, inputElement, priceDisp
         const result = apiResult.result;
         console.log("[Domain Check] Received result:", result);
 
-        if (result.status === 'available') {
+        if (result.availability === 'AVAILABLE') {
             inputElement.classList.add('prompt-input-available');
 
-            let bestPrivacyOption = null;
-            if (result.supportedPrivacy.includes('PRIVATE_CONTACT_DATA')) {
-                bestPrivacyOption = 'PRIVATE_CONTACT_DATA';
-            } else if (result.supportedPrivacy.includes('REDACTED_CONTACT_DATA')) {
-                bestPrivacyOption = 'REDACTED_CONTACT_DATA';
-            }
+            // Privacy logic removed. We now just show the purchase button.
+            const purchaseButton = document.createElement('button');
+            purchaseButton.textContent = `$${result.price} / year`;
+            purchaseButton.className = 'prompt-button prompt-purchase-button';
+            purchaseButton.onclick = async () => {
+                const confirmation = await prompt({
+                    id: 'domain_purchase_confirm',
+                    text: `Are you sure you want to purchase ${domainName}?`,
+                    type: 'options',
+                    options: [
+                        { label: 'yes', value: true },
+                        { label: 'no', value: false }
+                    ]
+                });
 
-            if (bestPrivacyOption) {
-                const purchaseButton = document.createElement('button');
-                purchaseButton.textContent = `$${result.price} / year`;
-                purchaseButton.className = 'prompt-button prompt-purchase-button';
-                purchaseButton.onclick = async () => {
-                    const confirmation = await prompt({
-                        id: 'domain_purchase_confirm',
-                        text: `Are you sure you want to purchase ${domainName}?`,
-                        type: 'options',
-                        options: [
-                            { label: 'yes', value: true },
-                            { label: 'no', value: false }
-                        ]
-                    });
-
-                    if (confirmation && confirmation.status === 'answered' && confirmation.value === true) {
-                        // Pop the original domain prompt from the stack to prevent it from re-rendering,
-                        // then pass its resolver to the purchase handler.
-                        const originalDomainPrompt = promptStack.pop();
-                        if (originalDomainPrompt && originalDomainPrompt.resolve) {
-                            handleDomainPurchase(domainName, result.price, projectId, bestPrivacyOption, originalDomainPrompt.resolve);
-                        } else {
-                            console.error("Could not find original domain prompt to resolve.");
-                        }
+                if (confirmation && confirmation.status === 'answered' && confirmation.value === true) {
+                    // Resolve the original domain prompt with the necessary details.
+                    if (resolve) {
+                        resolve({ 
+                            status: 'answered', 
+                            value: { domainName, price: result.price } 
+                        });
                     }
-                };
-                buttonWrapper.appendChild(purchaseButton);
-            } else {
-                priceDisplay.textContent = 'Privacy not supported';
-                priceDisplay.style.display = 'block';
-            }
+                }
+            };
+            buttonWrapper.appendChild(purchaseButton);
         } else {
             inputElement.classList.add('prompt-input-unavailable');
-            priceDisplay.textContent = 'unavailable';
+            priceDisplay.textContent = result.availability === 'INVALID' ? 'nope' : 'unavailable';
             priceDisplay.style.color = '#e53935';
             priceDisplay.style.display = 'block';
         }
@@ -247,7 +148,21 @@ async function handleDomainAvailabilityCheck(domainName, inputElement, priceDisp
 /**
  * Cleans up the prompt UI, hiding the prompt and showing the console.
  */
-function cleanupPromptUI() {
+function _cleanupPromptUI() {
+    // If there are more prompts waiting or an active prompt stack to restore, 
+    // do not tear down the UI to avoid flashing.
+    // However, if we are in the middle of clearing the stack, we should proceed.
+    if ((promptStack.length > 0 || activePromptStack.length > 0) && !window.__clearingPromptStack) {
+        return;
+    }
+
+    // Destroy Stripe instance if it exists
+    if (embeddedCheckoutRef && typeof embeddedCheckoutRef.destroy === 'function') {
+        console.log('[Prompt] Destroying Stripe Embedded Checkout instance.');
+        embeddedCheckoutRef.destroy();
+    }
+    embeddedCheckoutRef = null;
+
     const promptContainer = document.getElementById('prompt-container');
     if (promptContainer) {
         // Remove resize listeners if attached
@@ -264,91 +179,118 @@ function cleanupPromptUI() {
         } catch (_) {}
         promptContainer.remove();
     }
-    exitPromptMode();
-    // The calling function is now responsible for restoring header state.
-    isPrompting = false; // Reset state
-    currentResolve = null; // Reset resolver
+    
+    _exitPromptMode();
+    isPrompting = false; 
+    currentResolve = null;
+    currentPromptConfig = {};
 }
 
 /**
  * Forcefully cancels an active prompt and cleans up the UI.
  */
-export function cancelCurrentPrompt() {
+function _cancelCurrentPrompt() {
     // When a prompt is cancelled, we must also clear any pending re-auth action
     // that might have triggered it. This prevents unexpected actions later.
     clearPendingReauthAction();
 
     if (isPrompting && currentResolve) {
         console.log("[Prompt] Forcefully cancelling active prompt.");
-        currentResolve({ status: 'canceled', value: null });
-        // The promise resolving will trigger cleanup via the .finally() block in prompt()
+        const resolve = currentResolve;
+        currentResolve = null; // Prevent double resolution
+        resolve({ status: 'canceled', value: null });
     } else {
-        // If no prompt is active, just ensure the UI is clean.
-        cleanupPromptUI();
+        _cleanupPromptUI();
     }
 }
 
 export function clearPromptStack() {
     console.log('[Prompt] Clearing prompt stack.');
-    promptStack = [];
+    window.__clearingPromptStack = true;
+    try {
+        // Resolve all waiting prompts as cancelled. 
+        // This will trigger their .then() blocks in _processStack, 
+        // which handles popBackHandler() and _cleanupPromptUI().
+        promptStack.forEach(item => {
+            if (item.resolve) {
+                item.resolve({ status: 'canceled', value: null });
+            }
+        });
+        promptStack = [];
+        
+        // Resolve all active prompts underneath as cancelled.
+        // These are prompts that were interrupted by a newer prompt.
+        activePromptStack.forEach(item => {
+            if (item.resolve) {
+                item.resolve({ status: 'canceled', value: null });
+            }
+        });
+        activePromptStack = [];
+
+        // Force a final UI cleanup
+        _cleanupPromptUI();
+    } finally {
+        window.__clearingPromptStack = false;
+    }
 }
 
 export function prompt(promptConfig) {
     return new Promise(resolve => {
         promptStack.push({ config: promptConfig, resolve });
-        processStack();
+        _processStack();
     });
 }
 
-function processStack() {
+function _processStack() {
     if (promptStack.length === 0) {
-        return;
-    }
-
-    if (isPrompting) {
-        // A prompt is currently visible. We need to interrupt it, show the new one,
-        // and re-show the current one later.
-
-        // 1. Stash the current (interrupted) prompt's info.
-        const interruptedPrompt = { config: currentPromptConfig, resolve: currentResolve };
-
-        // 2. The new prompt to show is at the end of the stack. The interrupted
-        //    prompt should go back on the stack before it.
-        const newPromptToShow = promptStack.pop();
-        promptStack.push(interruptedPrompt);
-        promptStack.push(newPromptToShow);
-
-        // 3. Clean up the current UI *without* resolving the promise. This is a manual
-        //    version of cleanupPromptUI that avoids touching the promise.
-        const promptContainer = document.getElementById('prompt-container');
-        if (promptContainer) {
-            promptContainer.remove();
-        }
-        exitPromptMode();
-        
-        // 4. Reset state to allow the stack processor to run again from the top.
-        isPrompting = false;
-        currentResolve = null;
-        currentPromptConfig = {};
-
-        // 5. Defer the next processing step to allow the call stack to unwind.
-        setTimeout(processStack, 0);
         return;
     }
 
     isPrompting = true;
 
+    // If there's an existing prompt being shown, push it to the activePromptStack
+    if (currentResolve && currentPromptConfig) {
+        activePromptStack.push({ config: currentPromptConfig, resolve: currentResolve });
+    }
+
     const { config, resolve } = promptStack.pop();
+    currentResolve = resolve;
+    currentPromptConfig = config;
 
     _showActualPrompt(config).then(result => {
+        // Pop the back handler immediately when the prompt resolves, 
+        // but ONLY if this prompt pushed one. This must happen BEFORE 
+        // we potentially restore a previous prompt or cleanup the UI.
+        if (config && !config.noBackHandler) {
+            popBackHandler();
+        }
+
         resolve(result);
         isPrompting = false;
-        setTimeout(processStack, 0);
+
+        // If we are clearing the stack, stop here.
+        if (window.__clearingPromptStack) {
+            return;
+        }
+
+        // If we have an active prompt stack, restore the previous prompt
+        if (activePromptStack.length > 0) {
+            const previous = activePromptStack.pop();
+            // Re-push to promptStack so _processStack picks it up
+            promptStack.push(previous);
+        }
+        
+        // ONLY cleanup if there is nothing left to process
+        if (promptStack.length === 0) {
+            _cleanupPromptUI();
+        } else {
+            setTimeout(_processStack, 0);
+        }
     });
 }
 
 
-function _createDomainInput(container, promptConfig) {
+function _createDomainInput(container, promptConfig, resolve) {
     const { context } = promptConfig;
             const inputContainer = document.createElement('div');
                 inputContainer.className = 'prompt-input-container';
@@ -373,8 +315,8 @@ function _createDomainInput(container, promptConfig) {
                 buttonWrapper.id = 'prompt-button-wrapper';
                 rightSideContainer.appendChild(buttonWrapper);
 
-    const debouncedCheck = debounce((domain) => {
-        handleDomainAvailabilityCheck(domain, inputElement, priceDisplay, buttonWrapper, context.project_id);
+    const debouncedCheck = _debounce((domain) => {
+        _handleDomainAvailabilityCheck(domain, inputElement, priceDisplay, buttonWrapper, resolve);
     }, 500);
 
     inputElement.addEventListener('input', () => debouncedCheck(inputElement.value));
@@ -383,11 +325,11 @@ function _createDomainInput(container, promptConfig) {
     setTimeout(() => inputElement.focus(), 0);
 }
 
-function _handleTextPrompt(promptContentWrapper, promptConfig) {
+function _handleTextPrompt(promptContentWrapper, promptConfig, resolve) {
     const { id, defaultValue, inputStatus, context, validationRegex, validationError, validateOnSubmit, showContinueButton } = promptConfig;
 
     if (id === 'domain_name_input') {
-        _createDomainInput(promptContentWrapper, promptConfig);
+        _createDomainInput(promptContentWrapper, promptConfig, resolve);
         return;
     }
 
@@ -464,8 +406,8 @@ function _handleTextPrompt(promptContentWrapper, promptConfig) {
                     return;
                 }
 
-                if (currentResolve) {
-                    currentResolve({ status: 'answered', value: raw });
+                if (resolve) {
+                    resolve({ status: 'answered', value: raw });
                 }
             };
         } else {
@@ -475,8 +417,8 @@ function _handleTextPrompt(promptContentWrapper, promptConfig) {
             }
             continueBtn.onclick = () => {
                 if (validateInput()) {
-                    if (currentResolve) {
-                        currentResolve({ status: 'answered', value: inputElement.value });
+                    if (resolve) {
+                        resolve({ status: 'answered', value: inputElement.value });
                     }
                 }
             };
@@ -495,9 +437,9 @@ function _handleTextPrompt(promptContentWrapper, promptConfig) {
             inputElement.addEventListener('input', validateInput);
         }
         inputElement.addEventListener('keydown', (event) => {
-            if (event.key === 'Enter' && currentResolve) {
+            if (event.key === 'Enter' && resolve) {
                 if (!validationRegex || validateInput()) {
-                    currentResolve({ status: 'answered', value: inputElement.value });
+                    resolve({ status: 'answered', value: inputElement.value });
                 }
             }
         });
@@ -508,97 +450,8 @@ function _handleTextPrompt(promptContentWrapper, promptConfig) {
     setTimeout(() => inputElement.focus(), 0);
 }
 
-function _handlePhonePrompt(promptContentWrapper, promptConfig) {
-    const { id, defaultValue } = promptConfig;
 
-    const inputContainer = document.createElement('div');
-    inputContainer.className = 'prompt-input-container';
-    inputContainer.style.display = 'flex';
-    inputContainer.style.alignItems = 'center';
-    inputContainer.style.gap = '8px';
-
-    const plusSign = document.createElement('span');
-    plusSign.textContent = '+';
-    plusSign.style.fontSize = '1.2em';
-
-    const countryCodeInput = document.createElement('input');
-    countryCodeInput.type = 'text';
-    countryCodeInput.className = 'prompt-input-text';
-    countryCodeInput.placeholder = '1';
-    countryCodeInput.style.maxWidth = '100px';
-    countryCodeInput.style.flex = '0 1 auto';
-
-    const numberInput = document.createElement('input');
-    numberInput.type = 'text';
-    numberInput.className = 'prompt-input-text';
-    numberInput.placeholder = '1234567890';
-    numberInput.style.flex = '1 1 auto';
-
-    if (defaultValue && typeof defaultValue === 'object') {
-        countryCodeInput.value = defaultValue.countryCode || '';
-        numberInput.value = defaultValue.number || '';
-    } else if (typeof defaultValue === 'string') {
-        // Fallback for old string format, though this should be phased out.
-        const match = String(defaultValue).match(/^\+(\d{1,3})(.*)$/);
-        if (match) {
-            countryCodeInput.value = match[1];
-            numberInput.value = match[2].replace(/\D/g, '');
-        }
-    }
-
-    const resolvePhone = () => {
-        const countryCode = countryCodeInput.value.replace(/\D/g, '');
-        const number = numberInput.value.replace(/\D/g, '');
-
-        if (countryCode && number) {
-            if (currentResolve) {
-                // Resolve with an object instead of a combined string
-                currentResolve({ status: 'answered', value: { countryCode, number } });
-            }
-        } else {
-            const promptContainer = document.getElementById('prompt-container');
-            const promptTextEl = promptContainer.querySelector('.prompt-text');
-            if (promptTextEl && !promptTextEl.dataset.prefixedInvalid) {
-                promptTextEl.innerHTML = `<span style="color: #e53935;">Please enter a valid country code and phone number.</span><br>${promptTextEl.innerHTML}`;
-                promptTextEl.dataset.prefixedInvalid = 'true';
-            }
-            if (!countryCode) {
-                countryCodeInput.focus();
-            } else {
-                numberInput.focus();
-            }
-        }
-    };
-
-    inputContainer.appendChild(plusSign);
-    inputContainer.appendChild(countryCodeInput);
-    inputContainer.appendChild(numberInput);
-    promptContentWrapper.appendChild(inputContainer);
-
-    const buttonContainer = document.createElement('div');
-    buttonContainer.className = 'prompt-options-container';
-    buttonContainer.style.marginTop = '20px';
-
-    const continueBtn = document.createElement('button');
-    continueBtn.textContent = 'Continue';
-    continueBtn.className = 'prompt-option-button';
-    continueBtn.onclick = resolvePhone;
-    buttonContainer.appendChild(continueBtn);
-    promptContentWrapper.appendChild(buttonContainer);
-
-    const handleKeydown = (event) => {
-        if (event.key === 'Enter') {
-            event.preventDefault();
-            resolvePhone();
-        }
-    };
-    countryCodeInput.addEventListener('keydown', handleKeydown);
-    numberInput.addEventListener('keydown', handleKeydown);
-
-    setTimeout(() => countryCodeInput.focus(), 0);
-}
-
-function _handleOptionsPrompt(promptContentWrapper, promptConfig) {
+function _handleOptionsPrompt(promptContentWrapper, promptConfig, resolve) {
     const { options } = promptConfig;
     if (!options || options.length === 0) return;
 
@@ -610,8 +463,8 @@ function _handleOptionsPrompt(promptContentWrapper, promptConfig) {
         const value = typeof option === 'object' ? option.value : option;
         const url = typeof option === 'object' ? option.url : null;
 
-        const decoded = decodeHtmlEntities(String(text ?? ''));
-        const sanitized = sanitizeAllowedInlineHtml(decoded);
+        const decoded = _decodeHtmlEntities(String(text ?? ''));
+        const sanitized = _sanitizeAllowedInlineHtml(decoded);
         optionButton.innerHTML = sanitized;
         optionButton.className = 'prompt-option-button';
         
@@ -620,7 +473,7 @@ function _handleOptionsPrompt(promptContentWrapper, promptConfig) {
                 openPopup(url);
                 // Do not resolve, let the user click another button
             } else {
-                currentResolve({ status: 'answered', value: value });
+                resolve({ status: 'answered', value: value });
             }
         };
         optionsContainer.appendChild(optionButton);
@@ -628,7 +481,7 @@ function _handleOptionsPrompt(promptContentWrapper, promptConfig) {
     promptContentWrapper.appendChild(optionsContainer);
 }
 
-function _handleEmbeddedCheckoutPrompt(promptContentWrapper, promptConfig) {
+function _handleEmbeddedCheckoutPrompt(promptContentWrapper, promptConfig, resolve) {
             const container = document.createElement('div');
             container.id = 'embedded-checkout-container';
             container.className = 'embedded-checkout-container';
@@ -678,11 +531,20 @@ function _handleEmbeddedCheckoutPrompt(promptContentWrapper, promptConfig) {
 
                     const stripeInstance = window.Stripe(publishableKey);
 
-                        if (embeddedCheckoutRef && typeof embeddedCheckoutRef.destroy === 'function') {
-                            embeddedCheckoutRef.destroy();
-                        }
+                    if (embeddedCheckoutRef && typeof embeddedCheckoutRef.destroy === 'function') {
+                        embeddedCheckoutRef.destroy();
+                    }
 
-            const checkout = await stripeInstance.initEmbeddedCheckout({ clientSecret });
+                    const checkout = await stripeInstance.initEmbeddedCheckout({ 
+                        clientSecret,
+                        onComplete: () => {
+                            console.log('[Stripe] Checkout completed successfully (onComplete).');
+                            // Resolve immediately to let the caller (subscription.js) proceed
+                            if (resolve) {
+                                resolve({ status: 'answered', value: 'completed' });
+                            }
+                        }
+                    });
                     embeddedCheckoutRef = checkout;
                     checkout.mount('#embedded-checkout-container');
 
@@ -703,19 +565,18 @@ function _handleEmbeddedCheckoutPrompt(promptContentWrapper, promptConfig) {
 
                     const observer = new MutationObserver(() => {
                         const mounted = document.getElementById('embedded-checkout-container');
-                        if (!mounted || mounted.children.length === 0) {
+                        if (!mounted) {
                             observer.disconnect();
-                                if (embeddedCheckoutRef && typeof embeddedCheckoutRef.destroy === 'function') {
-                                    embeddedCheckoutRef.destroy();
-                                }
-                            embeddedCheckoutRef = null;
-                            if (currentResolve) currentResolve({ status: 'answered', value: 'completed' });
+                            // If the container was removed but we didn't resolve via onComplete,
+                            // it's a cancellation.
+                            if (resolve) resolve({ status: 'canceled', value: null });
                         }
                     });
                     observer.observe(container, { childList: true });
+
                 } catch (err) {
                     console.error('Embedded checkout error:', err);
-                    if (currentResolve) currentResolve({ status: 'canceled', value: null });
+                    if (resolve) resolve({ status: 'canceled', value: null });
                         if (embeddedCheckoutRef && typeof embeddedCheckoutRef.destroy === 'function') {
                             embeddedCheckoutRef.destroy();
                         }
@@ -725,11 +586,11 @@ function _handleEmbeddedCheckoutPrompt(promptContentWrapper, promptConfig) {
             })();
         }
 
-function _handleDomainPrompt(promptContentWrapper, promptConfig) {
-    _createDomainInput(promptContentWrapper, promptConfig);
+function _handleDomainPrompt(promptContentWrapper, promptConfig, resolve) {
+    _createDomainInput(promptContentWrapper, promptConfig, resolve);
 }
 
-function _handleSelectPrompt(promptContentWrapper, promptConfig) {
+function _handleSelectPrompt(promptContentWrapper, promptConfig, resolve) {
             const selectContainer = document.createElement('div');
             selectContainer.className = 'prompt-select-container';
             
@@ -738,8 +599,8 @@ function _handleSelectPrompt(promptContentWrapper, promptConfig) {
                 p.textContent = item.text;
                 p.className = 'prompt-select-option';
                 p.onclick = () => {
-                    if (currentResolve) {
-                        currentResolve({ status: 'answered', value: item.id });
+                    if (resolve) {
+                        resolve({ status: 'answered', value: item.id });
                     }
                 };
                 selectContainer.appendChild(p);
@@ -747,7 +608,7 @@ function _handleSelectPrompt(promptContentWrapper, promptConfig) {
             promptContentWrapper.appendChild(selectContainer);
 }
 
-function _handleFormPrompt(promptContentWrapper, promptConfig) {
+function _handleFormPrompt(promptContentWrapper, promptConfig, resolve) {
             const form = document.createElement('form');
             form.className = 'prompt-form';
             promptConfig.items.forEach(item => {
@@ -784,7 +645,7 @@ function _handleFormPrompt(promptContentWrapper, promptConfig) {
                     button.type = 'submit';
                 } else {
                     button.type = 'button';
-                    button.onclick = () => currentResolve({ status: 'answered', value: buttonConfig.value });
+                    button.onclick = () => resolve({ status: 'answered', value: buttonConfig.value });
                 }
                 buttonContainer.appendChild(button);
             });
@@ -794,7 +655,7 @@ function _handleFormPrompt(promptContentWrapper, promptConfig) {
                 e.preventDefault();
                 const formData = new FormData(form);
                 const values = Object.fromEntries(formData.entries());
-                currentResolve({ status: 'answered', value: values });
+                resolve({ status: 'answered', value: values });
             };
 
             promptContentWrapper.appendChild(form);
@@ -802,7 +663,6 @@ function _handleFormPrompt(promptContentWrapper, promptConfig) {
 
 const promptHandlers = {
     'text': _handleTextPrompt,
-    'phone': _handlePhonePrompt,
     'options': _handleOptionsPrompt,
     'embedded_checkout': _handleEmbeddedCheckoutPrompt,
     'domain': _handleDomainPrompt,
@@ -813,7 +673,7 @@ const promptHandlers = {
 function _showActualPrompt(promptConfig) {
     const { type } = promptConfig;
     // For embedded checkout, we enter prompt mode but without the dimming overlay.
-    enterPromptMode({ dim: type !== 'embedded_checkout' });
+    _enterPromptMode({ dim: type !== 'embedded_checkout' });
 
     // Recompute header height CSS var on open to avoid first-load mismatch
     try {
@@ -823,9 +683,20 @@ function _showActualPrompt(promptConfig) {
             document.documentElement.style.setProperty('--header-height', `${Math.ceil(h)}px`);
         }
     } catch (_) {}
-    const promise = new Promise(resolve => {
+    
+    return new Promise(resolve => {
+        // Define the cancel/back behavior for this prompt
+        const cancelPrompt = () => {
+            console.log(`Prompt '${promptConfig.id || 'unnamed'}' cancelled via back button`);
+            _cancelCurrentPrompt();
+        };
+
+        // Push this prompt's cancellation handler onto the stack
+        if (!promptConfig.noBackHandler) {
+            pushBackHandler(cancelPrompt);
+        }
+
         currentResolve = resolve;
-        currentPromptConfig = promptConfig; // Store current config
 
         const { id, text, type, options, defaultValue, inputStatus, context, imageUrl } = promptConfig;
 
@@ -835,7 +706,7 @@ function _showActualPrompt(promptConfig) {
             promptContainer = document.createElement('div');
             promptContainer.id = 'prompt-container';
             document.body.appendChild(promptContainer);
-                        } else {
+        } else {
             // Clear previous contents
             promptContainer.innerHTML = '';
         }
@@ -851,7 +722,7 @@ function _showActualPrompt(promptConfig) {
         promptContentWrapper.className = 'prompt-content-wrapper';
         if (type === 'embedded_checkout') {
             promptContentWrapper.classList.add('prompt-content-wrapper--subscription');
-                } else {
+        } else {
             promptContentWrapper.classList.add('prompt-content-wrapper--regular');
         }
         promptContainer.appendChild(promptContentWrapper);
@@ -872,16 +743,14 @@ function _showActualPrompt(promptConfig) {
             promptContentWrapper.appendChild(imageElement);
         }
 
-        const handler = promptHandlers[type];
-        if (handler) {
-            handler(promptContentWrapper, promptConfig);
+        try {
+            const handler = promptHandlers[type];
+            if (handler) {
+                handler(promptContentWrapper, promptConfig, resolve);
+            }
+        } catch (error) {
+            console.error("Error setting up prompt UI:", error);
+            resolve({ status: 'canceled', value: null });
         }
     });
-
-    // Automatically clean up the UI once the promise is settled (resolved or rejected).
-    promise.finally(() => {
-        cleanupPromptUI();
-    });
-
-    return promise;
 }

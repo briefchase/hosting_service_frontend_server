@@ -1,5 +1,5 @@
 // website/src/static/scripts/tutorial.js
-import { isTouchDevice } from '/static/scripts/utils.js';
+import { isTouchDevice } from '/static/scripts/effects.js';
 
 let activeTutorials = [];
 let tutorialTimer = null;
@@ -39,6 +39,11 @@ function createAndShowTutorial(text, anchorSelector, position = 'top-right') {
     const tutorialContent = document.createElement('div');
     tutorialContent.className = 'tutorial-text';
     tutorialContent.textContent = text;
+    
+    // Randomize animation duration slightly (+/- 0.2s)
+    const baseDuration = 6;
+    const variation = (Math.random() * 0.4) - 0.2;
+    tutorialContent.style.animationDuration = `${(baseDuration + variation).toFixed(2)}s`;
     
     tutorialContainer.appendChild(tutorialContent);
     document.body.appendChild(tutorialContainer);

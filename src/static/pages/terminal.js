@@ -3,15 +3,97 @@
 import { API_BASE_URL } from '/static/main.js';
 import { getUser } from '/static/scripts/authenticate.js';
 import { establishWebSocketConnection } from '/static/scripts/socket.js'; // Import the new function
-import { unregisterBackButtonHandler, returnFromTerminal } from '/static/main.js';
+import { pushBackHandler, popBackHandler, replaceBackHandler } from '/static/scripts/back.js';
 import { prompt } from '/static/pages/prompt.js';
+import { positionMusicControls } from '/static/pages/landing.js';
 
+const TERMINAL_HTML = `
+<div id="terminal-container" class="terminal-container">
+    <div id="terminal-output" class="terminal-output"></div>
+    <div id="terminal-input-line" class="terminal-input-line">
+        <span class="terminal-prompt">&gt;</span>
+        <div class="terminal-input-wrapper">
+            <input type="text" id="terminal-input" class="terminal-input" spellcheck="false" autocomplete="off">
+            <span id="terminal-cursor" class="terminal-cursor"></span>
+        </div>
+    </div>
+</div>
+`;
 
 let ws = null;
 let terminalOutput = null;
 let terminalInput = null;
 let terminalInputArea = null;
 let currentParams = {};
+let currentTerminalAPI = null;
+
+/**
+ * Loads and displays the terminal view.
+ * @param {object} [params] - Optional parameters. Can include `output` and `type` for initial message, or `existingWs` for using an existing WebSocket.
+ */
+export async function loadTerminalView(params = {}) {
+    console.log("loadTerminalView called with params:", params);
+    
+    document.body.classList.add('terminal-view-active');
+    document.body.classList.add('overlay-active');
+    
+    // Reposition music controls if they exist
+    positionMusicControls();
+
+    // Replace the current top handler (e.g. deployment confirmation) with the terminal return handler.
+    // This ensures that when we exit the terminal, we don't just "go back" to the previous view,
+    // but we actually trigger the cleanup and view restoration logic.
+    replaceBackHandler(() => returnFromTerminal());
+
+    const consoleContainer = document.getElementById('console-container');
+    if (!consoleContainer) {
+        console.error("Console container not found. Cannot load terminal view.");
+        throw new Error("Console container not found.");
+    }
+
+    // Synchronously wipe and replace content
+    // We keep the header-container if it exists
+    const headerContainer = document.getElementById('header-container');
+    consoleContainer.innerHTML = '';
+    if (headerContainer) {
+        consoleContainer.appendChild(headerContainer);
+    }
+    
+    // Inject terminal HTML
+    consoleContainer.insertAdjacentHTML('beforeend', TERMINAL_HTML);
+
+    // Initialize the terminal logic AFTER its HTML is in the DOM
+    try {
+        currentTerminalAPI = await initializeTerminal(params);
+        return currentTerminalAPI;
+    } catch (error) {
+        console.error("Failed to initialize terminal:", error);
+        throw error;
+    }
+}
+
+// Function to handle returning from terminal (used by back button and site title)
+export async function returnFromTerminal(params) {
+    console.log("Returning from terminal view. Loading console view with params:", params);
+    
+    // Pop the back handler we replaced when entering terminal view
+    popBackHandler();
+
+    if (currentTerminalAPI) {
+        currentTerminalAPI.cleanup();
+        currentTerminalAPI = null;
+    }
+
+    // Remove terminal-specific styling from the body
+    document.body.classList.remove('terminal-view-active');
+    document.body.classList.remove('overlay-active');
+    
+    // Reposition music controls for the menu view
+    positionMusicControls();
+    
+    const { loadConsoleView } = await import('/static/main.js');
+    loadConsoleView(params);
+}
 
 function addOutput(message, type = 'info') {
     if (!terminalOutput) return;
@@ -168,9 +250,6 @@ export function cleanupTerminal() {
     terminalOutput = null;
     terminalInput = null;
     terminalInputArea = null;
-
-    // Unregister terminal back button handler
-    unregisterBackButtonHandler();
 }
 
 // This function will be attached to the WebSocket by the calling module (e.g., deploy.js)
@@ -197,6 +276,7 @@ export async function handleTerminalMessage(event, { printLine, enableInput, dis
                     const result = await prompt(payload.prompt);
                     if (result.status === 'answered' && result.value === 'view_resource') {
                         const siteId = payload.prompt.context.site_id;
+                        const { returnFromTerminal } = await import('/static/pages/terminal.js');
                         returnFromTerminal({ specialNav: 'viewSite', siteId });
                     }
                 }, 100);

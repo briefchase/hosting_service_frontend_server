@@ -1,8 +1,9 @@
-// Import the central menu registry
 import { menus, renderMenu } from '/static/pages/menu.js';
-import { API_BASE_URL } from '/static/main.js';
-import { fetchWithAuth } from '/static/main.js';
+import { registerHandler } from '../scripts/registry.js';
+import { API_BASE_URL, fetchWithAuth } from '/static/main.js';
 import { updateStatusDisplay } from '/static/pages/menu.js';
+import { pushBackHandler } from '/static/scripts/back.js';
+import { prompt } from '/static/pages/prompt.js';
 
 // Subscription polling state
 let subscriptionPollingInterval = null;
@@ -33,12 +34,21 @@ export async function initializeStripe() {
 
 // Handle subscription checkout
 // This function now uses the generic loading UI via showLoading: true
-// The 'params' object is passed by the menu.js click handler.
-export async function handleSubscribe(params) {
-    const { updateStatusDisplay } = params;
+export async function handleSubscribe(actionFn, params) {
+    const backHandler = () => {
+        console.log("[Subscription] Back button pressed, cancelling checkout.");
+        window.__reauthInProgress = false; // Ensure re-auth state is cleared
+        window.pendingReauthAction = null; // Clear any pending action
+        if (params && params.renderMenu && params.menuContainer && params.menuContainer.dataset.previousMenu) {
+            params.renderMenu(params.menuContainer.dataset.previousMenu);
+        }
+    };
+
     updateStatusDisplay('loading...', 'info');
 
     try {
+        pushBackHandler(backHandler);
+        
         const response = await fetchWithAuth(`${API_BASE_URL}/create-checkout-session`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -55,14 +65,16 @@ export async function handleSubscribe(params) {
         if (session && (session.resumed || session.already_active)) {
             await fetchSubscriptionStatus();
             updateStatusDisplay('', 'info');
+            // No need to unregister here, actionFn will overwrite it
+            if (actionFn) return await actionFn(params);
+            clearBackHandlers();
             return;
         }
 
         // Prefer embedded checkout; if client_secret missing, the prompt will request it
         const clientSecret = session && session.client_secret;
-        const { prompt } = await import('/static/pages/prompt.js');
 
-        await prompt({
+        const result = await prompt({
             id: 'embedded_checkout_prompt',
             text: 'Complete your subscription below:',
             type: 'embedded_checkout',
@@ -73,21 +85,22 @@ export async function handleSubscribe(params) {
         // After user returns from embedded checkout, refresh status
         await fetchSubscriptionStatus();
         updateStatusDisplay('', 'info');
+        
+        // If we were in a guard flow, resume the original action
+        if (result.status === 'answered' && result.value === 'completed' && actionFn) {
+            console.log("[Subscription] Checkout complete, resuming original action.");
+            return await actionFn(params);
+        }
+        
+        // If no action to resume, the menu rendering will handle the back button.
     } catch (error) {
         console.error("Failed to start embedded checkout:", error);
         updateStatusDisplay(`Failed to start subscription process: ${error.message}`, "error");
     }
 }
 
-// Open Stripe billing portal (frontend may be allowed to talk to Stripe directly per your note)
-// Billing portal removed
-
-import { prompt } from '/static/pages/prompt.js';
-
 // This function now uses the generic loading UI via showLoading: true
-// The 'params' object is passed by the menu.js click handler.
-export async function handleCancelSubscription(params) {
-    const { updateStatusDisplay } = params;
+export async function handleCancelSubscription() {
     const confirmation = await prompt({
         id: 'confirm-cancel-subscription-prompt',
         text: "Are you sure you want to cancel your membership? Scheduled backups will not be created, and your deployed machines will remain active. You may however, enable your membership again anytime in the future.",
@@ -247,4 +260,9 @@ const subscriptionMenuConfig = {
 };
 
 // Register this menu configuration
-menus['subscription-menu'] = subscriptionMenuConfig; 
+menus['subscription-menu'] = subscriptionMenuConfig;
+
+// Register handlers with the central registry
+registerHandler('handleSubscribe', handleSubscribe);
+registerHandler('handleCancelSubscription', handleCancelSubscription);
+ 

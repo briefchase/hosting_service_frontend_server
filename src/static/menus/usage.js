@@ -1,5 +1,6 @@
 // Import the central menu registry
 import { menus, renderMenu, updateStatusDisplay } from '/static/pages/menu.js';
+import { registerHandler } from '../scripts/registry.js';
 import { API_BASE_URL, fetchWithAuth } from '/static/main.js';
 import { requireAuthAndSubscription } from '/static/scripts/authenticate.js';
 import { openPopup } from '/static/scripts/popup.js';
@@ -108,4 +109,8 @@ async function _getUsageLogic(params) {
     }
 }
 
-export const getUsage = requireAuthAndSubscription(_getUsageLogic, 'view usage'); 
+export const getUsage = requireAuthAndSubscription(_getUsageLogic, 'view usage');
+
+// Register handlers with the central registry
+registerHandler('getUsage', getUsage);
+ 

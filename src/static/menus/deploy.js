@@ -1,28 +1,27 @@
 // Import the central menu registry and API base URL
 import { menus } from '/static/pages/menu.js';
+import { registerHandler } from '../scripts/registry.js';
 import { 
     API_BASE_URL, 
-    fetchWithAuth, 
-    loadTerminalView, 
     loadConsoleView,
-    updateBackButtonHandler,
-    unregisterBackButtonHandler,
     updateAccountButtonVisibility,
-    updateSiteTitleVisibility
+    updateSiteTitleVisibility,
+    fetchWithAuth
 } from '/static/main.js';
+import { loadTerminalView } from '/static/pages/terminal.js';
 import { updateStatusDisplay, renderMenu } from '/static/pages/menu.js';
+import { pushBackHandler, popBackHandler } from '/static/scripts/back.js';
 // Import getUser to check authentication status and retrieve token
 import { getUser, initializeGoogleSignIn, triggerGoogleSignIn } from '/static/scripts/authenticate.js';
 // Import the new prompt display function and cleanup
 import {
     prompt,
-    cancelCurrentPrompt,
-    clearPromptStack,
+    clearPromptStack
 } from '/static/pages/prompt.js';
-// Import the new WebSocket connection function
 import { establishWebSocketConnection } from '/static/scripts/socket.js';
 import { handleTerminalMessage } from '/static/pages/terminal.js';
 import { requireAuthAndSubscription } from '/static/scripts/authenticate.js';
+import { purchaseDomain } from '/static/scripts/api.js';
 
 
 let currentProjectId = null;
@@ -50,32 +49,32 @@ function cancelActiveDeployment(reason, statusMessage) {
     
     const { ws, deploymentId } = activeDeployment;
 
-    if (ws && ws.readyState < WebSocket.CLOSING) {
-        try {
-            if (ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({
-                    action: "cancel_deployment",
-                    deployment_id: deploymentId,
-                    reason: reason
-                }));
+    if (ws) {
+        // Clear the onmessage handler BEFORE closing to prevent processing 
+        // any final "close" events or late messages during teardown.
+        ws.onmessage = null;
+        
+        if (ws.readyState < WebSocket.CLOSING) {
+            try {
+                if (ws.readyState === WebSocket.OPEN) {
+                    ws.send(JSON.stringify({
+                        action: "cancel_deployment",
+                        deployment_id: deploymentId,
+                        reason: reason
+                    }));
+                }
+                ws.close();
+            } catch (e) {
+                console.warn('Error during WebSocket cleanup:', e);
             }
-            ws.close();
-        } catch (e) {
-            console.warn('Error during WebSocket cleanup:', e);
         }
     }
 
-    unregisterBackButtonHandler();
-    
-    cancelCurrentPrompt();
-    clearPromptStack();
-    
     // cleanupDeployUI() is not needed as loadConsoleView rebuilds the DOM from scratch.
     
+    console.log("[DEPLOY CANCELLATION] Navigating back to deploy-menu via loadConsoleView");
     loadConsoleView({ 
-        menuId: 'deploy-menu', 
-        output: statusMessage || 'Deployment cancelled.', 
-        type: 'info' 
+        menuId: 'deploy-menu'
     });
     
     activeDeployment.ws = null;
@@ -92,7 +91,6 @@ menus['deploy-menu'] = {
             text: 'simple', 
             type: 'button', 
             action: 'handleDeploySimple',
-            showLoading: true,
             tooltip: 'fast, feature complete, skips dumb questions (reccomended)'
         },
         /*{ 
@@ -107,7 +105,6 @@ menus['deploy-menu'] = {
             text: 'advanced', 
             type: 'button', 
             action: 'handleDeployAdvanced',
-            showLoading: true,
             tooltip: 'asks unimportant questions scenic route (fun)' 
         },
     ],
@@ -131,6 +128,31 @@ async function _initiateDeployment(params = {}, deploymentType) {
     updateAccountButtonVisibility(false); // Hide account button
     updateSiteTitleVisibility(false); // Hide site title during deployment
     
+    // Register the master back button handler for the entire deployment.
+    // This prompts for confirmation before exiting.
+    const deploymentBackButtonHandler = async () => {
+        console.log("[Deployment] Back button pressed, showing exit confirmation.");
+        
+        const result = await prompt({
+            text: "Are you sure you want to exit this deployment?",
+            type: 'options',
+            options: [
+                { label: 'yes', value: true },
+                { label: 'no', value: false }
+            ],
+            id: 'deployment_exit_confirm'
+        });
+
+        console.log("[Deployment] Exit confirmation result:", result);
+        if (result && result.status === 'answered' && result.value === true) {
+            console.log("[Deployment] User confirmed exit, cancelling deployment.");
+            clearPromptStack();
+            cancelActiveDeployment("user_cancelled_via_prompt", "Deployment cancelled by user.");
+        }
+    };
+    
+    pushBackHandler(deploymentBackButtonHandler);
+
     // --- START: Show Loading GIF & Rainbow Text ---
     if (params.menuContainer) {
         const listContainer = params.menuContainer.querySelector('#menu-list-container');
@@ -244,32 +266,6 @@ async function communicate(ws, deploymentId) {
   let terminalApi = null;
   const terminalQueue = [];
    
-    // A unified back button handler that always prompts for confirmation.
-    const deploymentBackButtonHandler = () => {
-        // Unregister the handler to hide the back button while prompting.
-        unregisterBackButtonHandler();
-
-        prompt({
-            text: "Are you sure you want to exit this deployment?",
-            type: 'options',
-            options: [
-                { label: 'yes', value: true },
-                { label: 'no', value: false }
-            ],
-            id: 'deployment_exit_confirm'
-        }).then(result => {
-            if (result && result.status === 'answered' && result.value === true) {
-                cancelActiveDeployment("user_cancelled_via_prompt", "Deployment cancelled by user.");
-            } else {
-                // If the user selects "No" or cancels the prompt, re-register the handler to show the back button again.
-                updateBackButtonHandler(deploymentBackButtonHandler);
-            }
-        });
-    };
-    
-    // Start with the confirmation handler.
-    updateBackButtonHandler(deploymentBackButtonHandler);
-
     ws.onmessage = async (event) => {
         // If the terminal view is active, delegate all message handling to its
         // specialized processor and stop further execution in this handler.
@@ -356,7 +352,7 @@ async function communicate(ws, deploymentId) {
             }
             
             // The correct handler is already set at the start of `communicate`, so this is no longer needed.
-            // updateBackButtonHandler(terminalBackButtonHandler);
+            // pushBackHandler is called in loadTerminalView
 
             // Flush any messages that arrived while loading
             if (terminalApi && terminalQueue.length > 0) {
@@ -380,7 +376,37 @@ async function communicate(ws, deploymentId) {
         }
 
         try {
-            const answer = await prompt(payload); // The payload is the prompt config
+            const answer = await prompt({
+                ...payload,
+                noBackHandler: true
+            }); // The payload is the prompt config
+            
+            if (payload.type === 'domain' && answer && answer.status === 'answered' && answer.value) {
+                const { domainName, price } = answer.value;
+                const user = getUser();
+                if (!user || !user.token) {
+                    throw new Error("User not authenticated.");
+                }
+                
+                updateStatusDisplay(`Purchasing...`, 'info');
+                
+                const result = await purchaseDomain({
+                    domainName,
+                    price,
+                    offSession: true,
+                    token: user.token
+                });
+                
+                if (!result.ok) {
+                    throw new Error(result.error || 'Failed to purchase domain.');
+                }
+                
+                updateStatusDisplay(`Successfully registered ${domainName}!`, 'success');
+                
+                // Set the value back to just the domainName string for the worker
+                answer.value = domainName;
+            }
+
             // Send a structured response back to the worker
             ws.send(JSON.stringify({
                 status: answer.status, // 'answered' or 'canceled'
@@ -416,8 +442,6 @@ async function communicate(ws, deploymentId) {
                 console.log(`Transitioning to view site: ${siteId}`);
                 
                 // Perform a clean shutdown of the deployment state without navigating.
-                unregisterBackButtonHandler();
-                clearPromptStack();
                 activeDeployment.ws = null;
                 activeDeployment.deploymentId = null;
                 window.dispatchEvent(new CustomEvent('deploymentstatechange', { detail: { isActive: false } }));
@@ -433,3 +457,7 @@ async function communicate(ws, deploymentId) {
         });
     }
 }
+
+// Register handlers with the central registry
+registerHandler('handleDeploySimple', handleDeploySimple);
+registerHandler('handleDeployAdvanced', handleDeployAdvanced);

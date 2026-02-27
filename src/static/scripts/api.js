@@ -37,20 +37,15 @@ export async function fetchSites(options = {}) {
 }
 
 
-export async function purchaseDomain({ domainName, price, projectId, token, phoneNumber = null }) {
+export async function purchaseDomain({ domainName, price, token, offSession = false }) {
     if (!token) return { ok: false, status: 401, error: 'unauthorized' };
 
     try {
         const payload = {
             domain: domainName,
             price: price,
-            project_id: projectId
+            off_session: offSession
         };
-        // Expects phoneNumber to be an object: { countryCode, number }
-        if (phoneNumber && phoneNumber.countryCode && phoneNumber.number) {
-            payload.phone_country_code = phoneNumber.countryCode;
-            payload.phone_number = phoneNumber.number;
-        }
 
         const response = await fetchWithAuth(`${API_BASE_URL}/domains`, {
             method: 'POST',
@@ -104,6 +99,22 @@ export async function checkDomainAvailability({ domainName, token }) {
         return { ok: true, result: body };
     } catch (error) {
         return { ok: false, status: 0, error: error.message };
+    }
+}
+
+export async function fetchDomainRecords(domainName, isManaged) {
+    try {
+        const response = await fetchWithAuth(`${API_BASE_URL}/domains/${domainName}/records?isManaged=${isManaged}`);
+        if (!response.ok) {
+            const errorData = await response.json().catch(() => ({ 
+                message: `HTTP error ${response.status}: ${response.statusText}` 
+            }));
+            throw new Error(errorData.message || 'An unknown error occurred');
+        }
+        return await response.json();
+    } catch (error) {
+        console.error("Error in fetchDomainRecords:", error);
+        throw error;
     }
 }
 

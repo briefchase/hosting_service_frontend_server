@@ -1,6 +1,6 @@
 // website/src/static/scripts/what.js
 import { prompt } from '/static/pages/prompt.js';
-import { TextScramble } from '/static/scripts/utils.js';
+import { TextScramble } from '/static/scripts/effects.js';
 
 const adjectives = [
     'best', 'most transparent', 'sickest', 'cat friendliest', 
