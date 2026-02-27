@@ -373,7 +373,9 @@ export async function loadConsoleView(param) {
 export async function loadLandingView(options = {}) {
     history.replaceState({ view: 'landing' }, '', window.location.pathname.split('#')[0]);
     currentView = 'landing'; // Update view state to 'landing'
-    clearBackHandlers(); // Ensure no handlers leak to the landing page
+    
+    // Pure Final Boss: Landing page is the only place where we explicitly clear the stack
+    clearBackHandlers(); 
     
     // Cleanup any active menu polling/handlers
     if (currentPageCleanup) {
@@ -564,7 +566,7 @@ async function fetchHTML(url) {
 /**
  * Clears the content of the main console area.
  */
-function clearConsoleContent() {
+export function clearConsoleContent() {
     if (!consoleContainer || !headerContainer) {
         console.error("clearConsoleContent called before essential containers were cached.");
         return;

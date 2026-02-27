@@ -35,12 +35,31 @@ export async function initializeStripe() {
 // Handle subscription checkout
 // This function now uses the generic loading UI via showLoading: true
 export async function handleSubscribe(actionFn, params) {
+    const { renderMenu, menuContainer } = params || {};
+    
     const backHandler = () => {
         console.log("[Subscription] Back button pressed, cancelling checkout.");
         window.__reauthInProgress = false; // Ensure re-auth state is cleared
         window.pendingReauthAction = null; // Clear any pending action
-        if (params && params.renderMenu && params.menuContainer && params.menuContainer.dataset.previousMenu) {
-            params.renderMenu(params.menuContainer.dataset.previousMenu);
+        
+        // The Ballet: Pop ourselves before triggering navigation
+        // We don't need to call popBackHandler manually here because 
+        // the reject(UserCancelled) will trigger the finally block in menu.js
+        // which calls popBackHandler().
+
+        // Signal cancellation to the caller (e.g. menu.js click handler)
+        if (params && params.reject) {
+            params.reject(new Error('UserCancelled'));
+        } else {
+            // Fallback
+            import('/static/scripts/back.js').then(m => {
+                try { m.popBackHandler(); } catch (_) {}
+                if (renderMenu && menuContainer && menuContainer.dataset.previousMenu) {
+                    renderMenu(menuContainer.dataset.previousMenu);
+                } else if (renderMenu) {
+                    renderMenu('dashboard-menu');
+                }
+            });
         }
     };
 
@@ -65,9 +84,10 @@ export async function handleSubscribe(actionFn, params) {
         if (session && (session.resumed || session.already_active)) {
             await fetchSubscriptionStatus();
             updateStatusDisplay('', 'info');
-            // No need to unregister here, actionFn will overwrite it
+            
+            // The Ballet: The finally block in menu.js will handle popping our handler
+
             if (actionFn) return await actionFn(params);
-            clearBackHandlers();
             return;
         }
 
@@ -86,6 +106,8 @@ export async function handleSubscribe(actionFn, params) {
         await fetchSubscriptionStatus();
         updateStatusDisplay('', 'info');
         
+        // The Ballet: The finally block in menu.js will handle popping our handler
+        
         // If we were in a guard flow, resume the original action
         if (result.status === 'answered' && result.value === 'completed' && actionFn) {
             console.log("[Subscription] Checkout complete, resuming original action.");
@@ -96,6 +118,9 @@ export async function handleSubscribe(actionFn, params) {
     } catch (error) {
         console.error("Failed to start embedded checkout:", error);
         updateStatusDisplay(`Failed to start subscription process: ${error.message}`, "error");
+        
+        // The Ballet: Ensure we pop the handler even on error if it was pushed
+        // The finally block in menu.js will handle this
     }
 }
 

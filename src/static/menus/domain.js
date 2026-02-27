@@ -428,11 +428,11 @@ export const relinkDomain = requireAuth(async (params) => {
             if (isExternal) {
                 let promptText = '';
                 if (isUnlink) {
-                    promptText = `Remember to delete the A record associated with ${old_ip || 'the server'}`;
+                    promptText = `Remember to delete the A record for ${domainName} associated with ${old_ip || 'the server'}`;
                 } else if (old_ip && new_ip && old_ip !== new_ip) {
-                    promptText = `Change the A record associated with ${old_ip} to ${new_ip}`;
+                    promptText = `Change the A record for ${domainName} associated with ${old_ip} to ${new_ip}`;
                 } else {
-                    promptText = `Ensure there is an A record associated with ${new_ip || 'the server'}`;
+                    promptText = `Ensure there is an A record for ${domainName} associated with ${new_ip || 'the server'}`;
                 }
 
                 await prompt({
@@ -596,7 +596,8 @@ export const linkExternalDomain = requireAuth(async (params) => {
                 allDeploymentsRaw.push(...vm.deployments.map(dep => ({
                     ...dep,
                     machine_name: vm.name,
-                    machine_id: vm.id
+                    machine_id: vm.id,
+                    ip_address: vm.ip_address
                 })));
             }
         });
@@ -662,7 +663,7 @@ export const linkExternalDomain = requireAuth(async (params) => {
         if (response.ok && !result.error) {
             await prompt({
                 id: 'external_link_success',
-                text: `Ensure there is an A record associated with ${targetIp}`,
+                text: `Ensure there is an A record for ${domainName} associated with ${targetIp}`,
                 type: 'options',
                 options: [{ label: 'ok', value: true }]
             });

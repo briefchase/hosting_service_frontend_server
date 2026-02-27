@@ -8,11 +8,11 @@ import {
     updateAccountButtonVisibility,
     updateSiteTitleVisibility
 } from '/static/main.js';
-import { loadTerminalView, returnFromTerminal } from '/static/pages/terminal.js';
-import { pushBackHandler } from '/static/scripts/back.js';
+import { pushBackHandler, replaceBackHandler } from '/static/scripts/back.js';
 import { fetchSites } from '/static/scripts/api.js';
 import { prompt, clearPromptStack } from '/static/pages/prompt.js';
 import { establishWebSocketConnection } from '/static/scripts/socket.js';
+import { loadTerminalView, returnFromTerminal } from '/static/pages/terminal.js';
 
 
 let lastFetchedDeployments = [];
@@ -526,13 +526,17 @@ async function _communicateRestore(ws, params) {
                 // Set a simple back button to return to the menu.
                 // pushBackHandler(() => returnFromTerminal({ menuId: 'backup-menu' }));
 
-                // Re-enable terminal input to signal completion.
-                if (terminalApi) {
-                    terminalApi.enableInput();
-                    terminalApi.addOutput("Restore complete. Press back to return to the menu.", "success");
-                }
+    // Re-enable terminal input to signal completion.
+    if (terminalApi) {
+        terminalApi.enableInput();
+        terminalApi.addOutput("Restore complete. Press back to return to the menu.", "success");
+    }
 
-                // Mark restore as no longer active.
+    // Set a simple back button to return to the menu.
+    // The Ballet: We replace the current terminal handler with a return handler
+    replaceBackHandler(() => returnFromTerminal({ menuId: 'backup-menu' }));
+
+    // Mark restore as no longer active.
                 activeRestore.ws = null;
                 activeRestore.deploymentId = null;
                 window.dispatchEvent(new CustomEvent('deploymentstatechange', { detail: { isActive: false } }));

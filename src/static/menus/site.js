@@ -135,7 +135,8 @@ function cacheAllSiteMenus(sites) {
                 text: isDisabled ? `${item.name}...` : item.name,
                 targetMenu: `site-details-menu-${item.id}`,
                 resourceId: item.id,
-                type: 'button',
+                type: 'record',
+                action: 'viewSite',
                 disabled: isDisabled
             };
         });
@@ -286,6 +287,7 @@ export async function destroySite(params) {
 
 // Register handlers with the central registry
 registerHandler('listSites', listSites);
+registerHandler('viewSite', viewSite);
 registerHandler('destroySite', destroySite);
 registerHandler('destroyDeployment', destroyDeployment);
 registerHandler('openAddress', openAddress);

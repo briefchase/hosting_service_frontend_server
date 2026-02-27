@@ -52,12 +52,9 @@ export async function loadTerminalView(params = {}) {
     }
 
     // Synchronously wipe and replace content
-    // We keep the header-container if it exists
-    const headerContainer = document.getElementById('header-container');
-    consoleContainer.innerHTML = '';
-    if (headerContainer) {
-        consoleContainer.appendChild(headerContainer);
-    }
+    // We use the shared clearConsoleContent to preserve static elements (like landing view)
+    const { clearConsoleContent } = await import('/static/main.js');
+    clearConsoleContent();
     
     // Inject terminal HTML
     consoleContainer.insertAdjacentHTML('beforeend', TERMINAL_HTML);

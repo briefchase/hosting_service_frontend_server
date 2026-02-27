@@ -9,19 +9,14 @@ import {
     fetchWithAuth
 } from '/static/main.js';
 import { loadTerminalView } from '/static/pages/terminal.js';
-import { updateStatusDisplay, renderMenu } from '/static/pages/menu.js';
-import { pushBackHandler, popBackHandler } from '/static/scripts/back.js';
-// Import getUser to check authentication status and retrieve token
 import { getUser, initializeGoogleSignIn, triggerGoogleSignIn } from '/static/scripts/authenticate.js';
-// Import the new prompt display function and cleanup
-import {
-    prompt,
-    clearPromptStack
-} from '/static/pages/prompt.js';
+import { prompt, clearPromptStack } from '/static/pages/prompt.js';
 import { establishWebSocketConnection } from '/static/scripts/socket.js';
-import { handleTerminalMessage } from '/static/pages/terminal.js';
+import { updateStatusDisplay, renderMenu } from '/static/pages/menu.js';
+import { pushBackHandler, popBackHandler, replaceBackHandler } from '/static/scripts/back.js';
 import { requireAuthAndSubscription } from '/static/scripts/authenticate.js';
 import { purchaseDomain } from '/static/scripts/api.js';
+import { returnFromTerminal } from '/static/pages/terminal.js';
 
 
 let currentProjectId = null;
@@ -451,8 +446,23 @@ async function communicate(ws, deploymentId) {
                 loadConsoleView({ specialNav: 'viewSite', siteId: siteId });
 
             } else {
-                // Default behavior: return to the menu with a success message.
-                cancelActiveDeployment("deployment_complete", "Deployment successful.");
+                // User clicked OK. Leave them in the terminal.
+                
+                // Re-enable terminal input to signal completion.
+                if (terminalApi) {
+                    terminalApi.enableInput();
+                    terminalApi.addOutput("Deployment complete. Press back to return to the menu.", "success");
+                }
+
+                // Set a simple back button to return to the menu.
+                // The Ballet: We replace the current terminal handler with a return handler
+                replaceBackHandler(() => returnFromTerminal({ menuId: 'deploy-menu' }));
+
+                // Mark deployment as no longer active.
+                activeDeployment.ws = null;
+                activeDeployment.deploymentId = null;
+                window.dispatchEvent(new CustomEvent('deploymentstatechange', { detail: { isActive: false } }));
+                document.body.classList.remove('deployment-loading');
             }
         });
     }

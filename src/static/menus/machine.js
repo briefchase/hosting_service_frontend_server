@@ -102,7 +102,8 @@ function cacheAllMachineMenus(vms) {
     const machineItems = vms.map(vm => ({
         id: `machine-${vm.id}`,
         text: vm.name,
-        type: 'button',
+        type: 'record',
+        action: 'viewMachine',
         targetMenu: `machine-details-menu-${vm.id}`,
         resourceId: vm.id
     }));
@@ -221,9 +222,20 @@ export const renameMachine = requireAuthAndSubscription(async (params) => {
     }
 });
 
+export async function viewMachine(params) {
+    const { resourceId, renderMenu } = params;
+    if (menus[`machine-details-menu-${resourceId}`]) {
+        renderMenu(`machine-details-menu-${resourceId}`);
+    } else {
+        // Fallback or re-fetch logic if needed, similar to viewSite
+        renderMenu('machine-list-menu');
+    }
+}
+
 export const listMachines = requireAuthAndSubscription(_listMachinesLogic, 'view machines');
 
 // Register handlers with the central registry
 registerHandler('listMachines', listMachines);
+registerHandler('viewMachine', viewMachine);
 registerHandler('destroyMachine', destroyMachine);
 registerHandler('renameMachine', renameMachine);

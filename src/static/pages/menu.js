@@ -170,8 +170,8 @@ function generateMenuHTML(menuConfig, menuId) {
 // Function to render a specific menu
 // Exporting renderMenu in case action handlers need it directly
 export async function renderMenu(menuIdOrConfig) {
-    // Clear all existing back handlers when rendering a new menu
-    clearBackHandlers();
+    // Pure Final Boss: No more clearBackHandlers() anchor.
+    // We trust the ballet: every push is matched by a pop.
     
     if (menuContainerElement) {
         delete menuContainerElement.dataset.loading;
@@ -279,13 +279,24 @@ export async function renderMenu(menuIdOrConfig) {
     const isAuthenticated = currentAuthState && !currentAuthState.guest;
 
     if (menuConfig.backTarget) {
-        clearBackHandlers();
+        const { pushBackHandler, popBackHandler, getStack } = await import('/static/scripts/back.js');
+        // Pure Final Boss: Pop the current menu handler before pushing the new one
+        if (getStack().length > 0) {
+            try { popBackHandler(); } catch (_) {} 
+        }
+        
         pushBackHandler(() => {
             console.log(`Navigating (back) to menu: ${menuConfig.backTarget}`);
             renderMenu(menuConfig.backTarget);
         });
     } else if (menuId === 'dashboard-menu') {
         // Special case: Show back button on main menu, but don't set target (handled by main.js)
+        const { pushBackHandler, popBackHandler, getStack } = await import('/static/scripts/back.js');
+        // Pure Final Boss: Pop the current menu handler before pushing the new one
+        if (getStack().length > 0) {
+            try { popBackHandler(); } catch (_) {}
+        }
+
         pushBackHandler(() => {
             // Main JS will handle this case
             console.log("🔙 Default menu navigation - returning to landing");
@@ -296,8 +307,6 @@ export async function renderMenu(menuIdOrConfig) {
                 import('/static/main.js').then(m => m.loadLandingView && m.loadLandingView());
             }
         });
-    } else {
-        clearBackHandlers();
     }
 
     // Centralized account button logic
@@ -596,47 +605,13 @@ export function initializeMenu(containerElement, userState) {
 
             const targetMenu = li.dataset.targetMenu;
             const action = li.dataset.action;
-            const resourceId = li.dataset.resourceId;
-            const directive = li.dataset.directive;
-            const returnPage = li.dataset.returnPage;
-                const returnMenu = li.dataset.returnMenu;
-
-                if (targetMenu) {
-                    // Clear status before navigating to a new menu
-                    try { clearStatusDisplay(); } catch (_) {}
-                    console.log(`Navigating to menu: ${targetMenu}`);
-                    renderMenu(targetMenu);
-                } else if (action) {
-                    // --- Generic Loading UI ---
-                    if (li.dataset.showLoading === 'true') {
-                    // Hide menu items
-                    if (menuContainerElement) {
-                        const listContainer = menuContainerElement.querySelector('#menu-list-container');
-                        if (listContainer) {
-                            listContainer.innerHTML = ''; // Just clear the menu buttons
-                        }
-                    }
-                    // Hide both titles
-                    if (dynamicMenuTitleElement) {
-                        dynamicMenuTitleElement.style.display = 'none';
-                    }
-                    updateSiteTitleVisibility(false);
-                    updateAccountButtonVisibility(false);
-
-                    // Set loading state and store the menu to return to
-                    if (menuContainerElement) {
-                        menuContainerElement.dataset.loading = "true";
-                        menuContainerElement.dataset.previousMenu = currentMenuId;
-                    }
-                    
-                    // Push a back handler to handle cancelling the loading state
-                    const previousMenuId = currentMenuId;
-                    pushBackHandler(() => {
-                        console.log('Back clicked during loading, restoring previous menu.');
-                        renderMenu(previousMenuId);
-                    });
-                }
-
+            
+            if (targetMenu) {
+                // Clear status before navigating to a new menu
+                try { clearStatusDisplay(); } catch (_) {}
+                console.log(`Navigating to menu: ${targetMenu}`);
+                renderMenu(targetMenu);
+            } else if (action) {
                 // Construct params object by collecting all data attributes from the element
                 const params = { ...li.dataset }; // Clone the dataset object
                 
@@ -651,44 +626,93 @@ export function initializeMenu(containerElement, userState) {
                 // Call the appropriate handler from the central registry
                 const actionHandlers = getHandlers();
                 if (actionHandlers[action]) {
+                    const { pushBackHandler, popBackHandler } = await import('/static/scripts/back.js');
+                    let loadingHandlerPushed = false;
+                    let cancelAction = null;
+
                     try {
-                        // Clear status message just before executing the action
-                        clearStatusDisplay();
-                        
-                        // Pass the constructed params object
-                        await actionHandlers[action](params);
-                    } catch (error) {
-                        // Handle the specific "project_not_initialized" error.
-                        if (error.id === 'project_not_initialized') {
-                            // The UI is in a loading state. Use updateStatusDisplay to show the message.
-                            // This will replace the "fetching..." message in the correct element.
-                            updateStatusDisplay("You must initiate at least one deployment before accessing this menu.", 'info');
-                            // The back button will now return the user to the previous menu,
-                            // as the 'data-loading' and 'data-previous-menu' attributes are already set.
+                        // --- Generic Loading UI ---
+                        if (li.dataset.showLoading === 'true') {
+                            // ... UI cleanup and state setting ...
+                            if (menuContainerElement) {
+                                const listContainer = menuContainerElement.querySelector('#menu-list-container');
+                                if (listContainer) {
+                                    listContainer.innerHTML = ''; // Just clear the menu buttons
+                                }
+                            }
+                            // Hide both titles
+                            if (dynamicMenuTitleElement) {
+                                dynamicMenuTitleElement.style.display = 'none';
+                            }
+                            updateSiteTitleVisibility(false);
+                            updateAccountButtonVisibility(false);
+
+                            // Set loading state and store the menu to return to
+                            if (menuContainerElement) {
+                                menuContainerElement.dataset.loading = "true";
+                                menuContainerElement.dataset.previousMenu = currentMenuId;
+                            }
+                            
+                            const previousMenuId = currentMenuId;
+                            
+                            // The Promise Ballet: Create a promise that rejects when 'Back' is clicked
+                            const cancelPromise = new Promise((resolve, reject) => {
+                                cancelAction = () => {
+                                    console.log('Back clicked during loading, rejecting action.');
+                                    reject(new Error('UserCancelled'));
+                                };
+                                pushBackHandler(cancelAction);
+                                loadingHandlerPushed = true;
+                                
+                                // Pass the reject function to the action so guards can trigger it
+                                params.reject = reject;
+                            });
+
+                            // Clear status message
+                            clearStatusDisplay();
+                            
+                            // Race the action against the cancellation
+                            await Promise.race([
+                                actionHandlers[action](params),
+                                cancelPromise
+                            ]);
                         } else {
-                        console.error(`Error executing action "${action}":`, error);
-                            // For other errors, restore the previous menu and show a status message.
+                            // Non-loading action
+                            clearStatusDisplay();
+                            await actionHandlers[action](params);
+                        }
+                    } catch (error) {
+                        if (error.message === 'UserCancelled') {
+                            const previousMenuId = menuContainerElement.dataset.previousMenu;
+                            if (previousMenuId) {
+                                await renderMenu(previousMenuId);
+                            }
+                        } else if (error.id === 'project_not_initialized') {
+                            updateStatusDisplay("You must initiate at least one deployment before accessing this menu.", 'info');
+                        } else {
+                            console.error(`Error executing action "${action}":`, error);
                             const previousMenuId = menuContainerElement.dataset.previousMenu;
                             if (previousMenuId) {
                                 renderMenu(previousMenuId);
                             }
-                            // If it's a known Auth guard error, just exit, as requireAuth handles it
                             if (error.message !== 'ReauthInitiated') {
                                 updateStatusDisplay(`Error: ${error.message || 'Action failed.'}`, 'error');
                             }
                         }
                     } finally {
-                        // We do however pop the temporary "loading" back handler
-                        if (li.dataset.showLoading === 'true') {
-                            popBackHandler();
+                        // The Ballet: If the action finished without the user hitting 'Back', 
+                        // our handler is still on the stack. We must pop it.
+                        if (loadingHandlerPushed) {
+                            const { getStack, popBackHandler } = await import('/static/scripts/back.js');
+                            const stack = getStack();
+                            if (stack[stack.length - 1] === cancelAction) {
+                                popBackHandler();
+                            }
                         }
                     }
                 } else {
                     console.warn(`No handler found for action: ${action}`);
                 }
-            } else {
-                 // This case should ideally not happen if it's a menu-button without target/action
-                 console.log(`Menu button clicked (no action/nav defined): ${target.textContent} (id: ${target.id})`);
             }
         });
     }

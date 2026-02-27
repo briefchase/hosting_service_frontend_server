@@ -70,6 +70,10 @@ export function configureAuthSuccessCallback(callbackFn) {
  */
 async function handleAuthenticationSuccess(userSession) {
     window.__reauthInProgress = false; // Clear re-auth state
+
+    // Pop the re-auth back handler we pushed in initiateReauthUI
+    // The Ballet: The finally block in menu.js will handle this
+
     // Run the immediate success callback if it's configured
     if (onAuthSuccessCallback) {
         try {
@@ -334,18 +338,31 @@ export async function initiateReauthUI(params = {}) {
     }
 
     // Register a back button handler to cancel the re-auth flow
-    const { pushBackHandler, clearBackHandlers } = await import('/static/scripts/back.js');
+    const { pushBackHandler } = await import('/static/scripts/back.js');
     const { renderMenu } = await import('/static/pages/menu.js');
+
     const backHandler = () => {
         console.log("[Auth] Back button pressed during re-auth, cancelling.");
         window.__reauthInProgress = false;
         window.pendingReauthAction = null;
         
-        // Restore the previous menu if possible, or go to dashboard
-        if (menuContainer && menuContainer.dataset.previousMenu) {
-            renderMenu(menuContainer.dataset.previousMenu);
+        // Signal cancellation to the caller (e.g. menu.js click handler)
+        // This is the key to the Promise Ballet: the guard rejects, 
+        // allowing the caller's finally block to clean up its own handler.
+        if (params && params.reject) {
+            params.reject(new Error('UserCancelled'));
         } else {
-            renderMenu('dashboard-menu');
+            // Fallback for direct calls
+            import('/static/scripts/back.js').then(m => {
+                // The Ballet: A handler must be self-consuming, but since we are in a fallback
+                // that doesn't use the Promise race, we must pop manually.
+                try { m.popBackHandler(); } catch (_) {}
+                if (menuContainer && menuContainer.dataset.previousMenu) {
+                    renderMenu(menuContainer.dataset.previousMenu);
+                } else {
+                    renderMenu('dashboard-menu');
+                }
+            });
         }
     };
     pushBackHandler(backHandler);
@@ -392,7 +409,10 @@ export function requireAuth(actionFn, actionName) {
         if (!user) {
             console.log("[Auth Guard] No user found in sessionStorage, initiating reauth.");
             await _initiateReauth(guarded, params);
-            return;
+            // Return a promise that never resolves. This keeps the caller (menu.js)
+            // in its 'await' state, allowing the back button handler to be the 
+            // only way out (via rejection).
+            return new Promise(() => {});
         }
 
         console.log("[Auth Guard] User found, proceeding with action.");
@@ -402,7 +422,7 @@ export function requireAuth(actionFn, actionName) {
         } catch (error) {
             if (error && error.message === 'ReauthInitiated') {
                 await _initiateReauth(guarded, params);
-                return;
+                return new Promise(() => {});
             }
             throw error;
         }
@@ -446,12 +466,17 @@ export function requireSubscription(actionFn) {
                 const { initializeStripe, handleSubscribe } = await import('/static/menus/subscription.js');
                 try {
                     await initializeStripe();
+                    
                     // Pass the actionFn and params so handleSubscribe can resume the action
+                    // handleSubscribe will manage its own back handler (push/pop)
                     await handleSubscribe(actionFn, params);
                 } catch (error) {
                     console.error("Subscription flow failed:", error);
                 }
-                return;
+                // Return a promise that never resolves. This keeps the caller (menu.js)
+                // in its 'await' state, allowing the back button handler to be the 
+                // only way out (via rejection).
+                return new Promise(() => {});
             }
             return await actionFn(params);
         } catch (error) {

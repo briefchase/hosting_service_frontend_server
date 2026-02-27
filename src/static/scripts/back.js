@@ -21,15 +21,30 @@ export function pushBackHandler(handler) {
 export function popBackHandler() {
     if (handlerStack.length > 0) {
         handlerStack.pop();
+        console.log(`[BackStack] Popped handler. New depth: ${handlerStack.length}`);
+    } else {
+        // Pure Final Boss: We throw an error if the stack is empty.
+        // The only exception is the initial load, which we handle by catching in renderMenu.
+        throw new Error('[BackStack] Spectacular Failure: Attempted to pop from an empty stack.');
     }
     _updateUI();
+}
+
+/**
+ * Returns the current handler stack (read-only).
+ */
+export function getStack() {
+    return [...handlerStack];
 }
 
 /**
  * Clears the entire handler stack and hides the back button.
  */
 export function clearBackHandlers() {
-    handlerStack = [];
+    if (handlerStack.length > 0) {
+        console.log(`[BackStack] Clearing entire stack (Depth was: ${handlerStack.length})`);
+        handlerStack = [];
+    }
     _updateUI();
 }
 
@@ -94,9 +109,12 @@ export const executeBackHandler = (event) => {
         event.stopPropagation();
     }
     if (handlerStack.length > 0) {
-        console.log(`🔙 Executing back handler (Stack depth: ${handlerStack.length})`);
-        const topHandler = handlerStack[handlerStack.length - 1];
+        // The Ballet: A handler must be self-consuming. 
+        // We pop it BEFORE executing to prevent rapid double-clicks from triggering it twice.
+        const topHandler = handlerStack.pop();
+        console.log(`🔙 Executing back handler (New depth: ${handlerStack.length})`);
         topHandler();
+        _updateUI();
         return true;
     } else {
         console.log('🔙 Back button clicked, but stack is empty.');
