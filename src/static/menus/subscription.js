@@ -35,7 +35,12 @@ export async function initializeStripe() {
 // Handle subscription checkout
 // This function now uses the generic loading UI via showLoading: true
 export async function handleSubscribe(actionFn, params) {
-    const { renderMenu, menuContainer } = params || {};
+    if (typeof actionFn === 'object' && !params) {
+        params = actionFn;
+        actionFn = params.actionFn;
+    }
+
+    const { renderMenu, menuContainer, promoCode } = params || {};
     
     const backHandler = () => {
         console.log("[Subscription] Back button pressed, cancelling checkout.");
@@ -68,15 +73,18 @@ export async function handleSubscribe(actionFn, params) {
     try {
         pushBackHandler(backHandler);
         
+        const body = { embedded: true };
+        if (promoCode) body.promo_code = promoCode;
+
         const response = await fetchWithAuth(`${API_BASE_URL}/create-checkout-session`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ embedded: true })
+            body: JSON.stringify(body)
         });
 
         if (!response.ok) {
             const errorData = await response.json().catch(() => ({ error: 'An unknown error occurred.' }));
-            throw new Error(errorData.error);
+            throw new Error(errorData.error || 'Could not create a checkout session.');
         }
 
         const session = await response.json();
@@ -85,10 +93,10 @@ export async function handleSubscribe(actionFn, params) {
             await fetchSubscriptionStatus();
             updateStatusDisplay('', 'info');
             
-            // The Ballet: The finally block in menu.js will handle popping our handler
+            // The Ballet: The finally block will handle popping our handler
 
-            if (actionFn) return await actionFn(params);
-            return;
+            if (actionFn) return await actionFn({ ...params, session });
+            return session; // Return session info if no actionFn
         }
 
         // Prefer embedded checkout; if client_secret missing, the prompt will request it
@@ -103,24 +111,43 @@ export async function handleSubscribe(actionFn, params) {
         });
 
         // After user returns from embedded checkout, refresh status
-        await fetchSubscriptionStatus();
+        try {
+            await fetchSubscriptionStatus();
+        } catch (e) {
+            if (e.message === 'ReauthInitiated') throw e;
+            console.warn("[Subscription] Failed to refresh status after checkout:", e);
+        }
         updateStatusDisplay('', 'info');
         
-        // The Ballet: The finally block in menu.js will handle popping our handler
+        // The Ballet: The finally block will handle popping our handler
         
         // If we were in a guard flow, resume the original action
-        if (result.status === 'answered' && result.value === 'completed' && actionFn) {
-            console.log("[Subscription] Checkout complete, resuming original action.");
-            return await actionFn(params);
+        if (result.status === 'answered' && result.value === 'completed') {
+            if (actionFn) {
+                console.log("[Subscription] Checkout complete, resuming original action.");
+                return await actionFn(params);
+            }
+            return { status: 'completed' };
         }
         
-        // If no action to resume, the menu rendering will handle the back button.
+        return { status: 'cancelled' };
     } catch (error) {
+        if (error.message === 'ReauthInitiated') {
+            // Re-throw so requireAuth can handle it if it was wrapped
+            throw error;
+        }
         console.error("Failed to start embedded checkout:", error);
         updateStatusDisplay(`Failed to start subscription process: ${error.message}`, "error");
         
         // The Ballet: Ensure we pop the handler even on error if it was pushed
-        // The finally block in menu.js will handle this
+        // The finally block will handle this
+    } finally {
+        // The Ballet: Always pop our own handler before finishing
+        const { getStack, popBackHandler } = await import('/static/scripts/back.js');
+        const stack = getStack();
+        if (stack[stack.length - 1] === backHandler) {
+            popBackHandler();
+        }
     }
 }
 

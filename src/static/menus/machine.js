@@ -124,11 +124,12 @@ function cacheAllMachineMenus(vms) {
     });
 }
 
-async function _listMachinesLogic({ renderMenu, updateStatusDisplay }) {
+async function _listMachinesLogic(params) {
+    const { updateStatusDisplay } = params;
     updateStatusDisplay('fetching machines...', 'info');
     const vms = await fetchAndProcessMachines();
     cacheAllMachineMenus(vms);
-    renderMenu('machine-list-menu');
+    return 'machine-list-menu';
 }
 
 export const destroyMachine = requireAuthAndSubscription(async (params) => {
@@ -162,11 +163,13 @@ export const destroyMachine = requireAuthAndSubscription(async (params) => {
         }
 
         updateStatusDisplay(result.message || 'Machine destroyed successfully.', 'success');
-        await _listMachinesLogic({ renderMenu, updateStatusDisplay });
+        return await _listMachinesLogic({ renderMenu, updateStatusDisplay });
 
     } catch (e) {
-        console.error('Destroy machine error:', e);
-        updateStatusDisplay(`Could not destroy machine: ${e.message}`, 'error');
+        if (e.message !== 'UserCancelled') {
+            console.error('Destroy machine error:', e);
+        }
+        return await _listMachinesLogic({ renderMenu, updateStatusDisplay });
     }
 }, 'destroy a machine');
 
@@ -208,17 +211,18 @@ export const renameMachine = requireAuthAndSubscription(async (params) => {
 
         if (response.ok && result.success) {
             updateStatusDisplay(result.message || 'Machine renamed successfully!', 'success');
-            // After successful rename, re-fetch and display the updated machine list.
-            await _listMachinesLogic({ renderMenu, updateStatusDisplay });
+            // Return the menu target for organic transition
+            return await _listMachinesLogic({ renderMenu, updateStatusDisplay });
         } else {
             throw new Error(result.error || 'Failed to rename machine.');
         }
     } catch (error) {
-        console.error('Error renaming machine:', error);
-        updateStatusDisplay(`Error: ${error.message}`, 'error');
+        if (error.message !== 'UserCancelled') {
+            console.error('Error renaming machine:', error);
+        }
         // If the rename fails, we should still refresh the machine list
         // to return the user to a stable state.
-        await _listMachinesLogic({ renderMenu, updateStatusDisplay });
+        return await _listMachinesLogic({ renderMenu, updateStatusDisplay });
     }
 });
 

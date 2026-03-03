@@ -19,8 +19,8 @@ async function fetchDomains() {
     return response.json();
 }
 
-export const _purchaseDomainLogic = requireAuthAndSubscription(async (params) => {
-    const { renderMenu, updateStatusDisplay, menuContainer, menuTitle } = params;
+export const _purchaseDomainLogic = requireAuth(async (params) => {
+    const { updateStatusDisplay } = params;
 
     try {
         const answer = await prompt({
@@ -30,11 +30,10 @@ export const _purchaseDomainLogic = requireAuthAndSubscription(async (params) =>
         });
 
         if (!answer || answer.status !== 'answered' || !answer.value) {
-            throw new Error("Domain registration was cancelled.");
+            throw new Error("UserCancelled");
         }
         
         const newDomainDetails = answer.value;
-
         const { domainName, price } = newDomainDetails;
 
         let offSession = false;
@@ -52,21 +51,9 @@ export const _purchaseDomainLogic = requireAuthAndSubscription(async (params) =>
             if (cardPrompt && cardPrompt.status === 'answered' && cardPrompt.value) {
                 offSession = true;
             } else if (!cardPrompt || cardPrompt.status === 'canceled') {
-                throw new Error("Domain registration was cancelled.");
+                throw new Error("UserCancelled");
             }
         }
-
-        // Enter "loading mode" manually to match standard menu transitions
-        if (menuContainer) {
-            const listContainer = menuContainer.querySelector('#menu-list-container');
-            if (listContainer) listContainer.innerHTML = '';
-            menuContainer.dataset.loading = "true";
-            menuContainer.dataset.previousMenu = 'domain-menu';
-        }
-        if (menuTitle) menuTitle.style.display = 'none';
-        updateSiteTitleVisibility(false);
-        updateAccountButtonVisibility(false);
-        clearBackHandlers(); // Hide back button during purchase
 
         // Use 'loading...' for checkout initiation, 'purchasing...' for immediate charges
         const statusMsg = offSession ? `purchasing ${domainName}...` : 'loading...';
@@ -96,34 +83,25 @@ export const _purchaseDomainLogic = requireAuthAndSubscription(async (params) =>
                     });
                     
                     if (checkoutPrompt.status !== 'answered' || checkoutPrompt.value !== 'completed') {
-                        throw new Error("Checkout incomplete or cancelled.");
+                        throw new Error("UserCancelled");
                     }
                 } else {
-                    // If we expected a checkout but didn't get a secret, the backend likely misconfigured the response
-                    throw new Error("Unable to initiate checkout. Please try again or use the card on file.");
+                    throw new Error("Unable to initiate checkout.");
                 }
             }
-            listDomains(params); // Immediate refresh on success
+            return await listDomains(params);
         } else {
             throw new Error(result.error || 'Failed to purchase domain.');
         }
 
     } catch (error) {
-        console.log("Domain registration cancelled or failed.", error.message);
-        const isCancellation = error.message === "Domain registration was cancelled." || error.message === "Checkout incomplete or cancelled.";
-        
-        if (!isCancellation) {
-             updateStatusDisplay(`error: ${error.message}`, 'error');
-             // If it was a real error (not a cancellation), wait before refreshing
-             // so the user can actually read the error message.
-             if (renderMenu) {
-                 setTimeout(() => listDomains(params), 3000);
-             }
-        } else if (renderMenu) {
-            listDomains(params); // Immediate refresh on cancellation
+        if (error.message === 'UserCancelled') {
+            console.log("[Domain] UserCancelled caught, propagating to menu.js for clean cleanup.");
+            throw error;
         }
-    } finally {
-        // No manual clear needed, listDomains/renderMenu handles it
+        console.error("Domain registration failed:", error);
+        // Only refresh if it was a real error, to return to a stable state
+        return await listDomains(params);
     }
 }, 'purchase a domain');
 
@@ -133,26 +111,23 @@ let cardOnFile = false; // This now tracks if a card is on file
 async function _listDomainsLogic(params) {
     const { renderMenu, updateStatusDisplay, initialMenuId } = params;
     try {
-        updateStatusDisplay('loading...', 'info');
+        updateStatusDisplay('fetching domains...', 'info');
 
         // We now get card on file status directly from the domains fetch
         const domainData = await fetchDomains();
         cardOnFile = !!domainData.isCardOnFile;
 
-        updateStatusDisplay('fetching domains...', 'info');
-        
         const allDeployments = [];
         // The backend now returns linked deployment info directly in the domain objects.
         // We no longer need to fetch sites separately for cross-referencing.
         
         if (domainData.message) {
-            renderMenu({
+            return {
                 id: 'domain-menu',
                 text: 'domains:',
                 items: [{ text: domainData.message, type: 'record' }],
                 backTarget: 'resource-menu'
-            });
-            return;
+            };
         }
 
         const allDomainObjects = (domainData.domains || []).map(d => ({ 
@@ -294,6 +269,7 @@ async function _listDomainsLogic(params) {
             text: 'register domain',
             type: 'button',
             action: 'registerDomain',
+            showLoading: true,
             tooltip: 'purchase a new domain'
         });
 
@@ -313,18 +289,18 @@ async function _listDomainsLogic(params) {
             backTarget: 'resource-menu'
         };
         menus['domain-menu'] = finalConfig;
-        renderMenu(initialMenuId || 'domain-menu');
+        return initialMenuId || 'domain-menu';
     } catch (error) {
         if (error.message === 'ReauthInitiated') {
             // Propagate to the requireAuth guard so it can save the pending action
             throw error;
         }
-        renderMenu({
+        return {
             id: 'domain-menu',
             text: 'error',
             items: [{ text: `could not load domains: ${error.message}`, type: 'record' }],
             backTarget: 'resource-menu'
-        });
+        };
     }
 }
 
@@ -442,16 +418,21 @@ export const relinkDomain = requireAuth(async (params) => {
                     options: [{ label: 'ok', value: true }]
                 });
             }
+            // Return the menu target for organic transition
+            return await listDomains({ ...params, initialMenuId: `domain-details-${domainName.replace(/\./g, '-')}` });
         } else {
             throw new Error(result.error || `Failed to ${isUnlink ? 'unlink' : 'initiate relink'}.`);
         }
 
-    } catch (error) {
-        updateStatusDisplay(`Error: ${error.message}`, 'error');
-    } finally {
+        } catch (error) {
+            if (error.message === 'UserCancelled') {
+                console.log("[Relink] UserCancelled caught, propagating.");
+                throw error; // Let menu.js handle the transition back
+            }
+            console.error(`Error during relink for ${domainName}:`, error);
         // 4. ALWAYS refresh the domain list immediately to show the new state.
         // We pass initialMenuId to stay on the specific domain's detail page.
-        listDomains({ ...params, initialMenuId: `domain-details-${domainName.replace(/\./g, '-')}` });
+        return await listDomains({ ...params, initialMenuId: `domain-details-${domainName.replace(/\./g, '-')}` });
     }
 }, 'relink domain');
 
@@ -481,18 +462,21 @@ export const toggleTransferOut = requireAuthAndSubscription(async (params) => {
                 });
             }
             updateStatusDisplay(`Successfully ${currentAction === 'authorize' ? 'authorized' : 'cancelled'} transfer for ${domainName}!`, 'success');
-            // Refresh the domain list to show updated lock status
-            await listDomains({ renderMenu, updateStatusDisplay, initialMenuId: `domain-details-${domainName.replace(/\./g, '-')}` });
+            // Return the menu target for organic transition
+            return await listDomains({ ...params, initialMenuId: `domain-details-${domainName.replace(/\./g, '-')}` });
         } else {
             throw new Error(result.error || `Failed to ${currentAction} transfer.`);
         }
     } catch (error) {
-        console.error(`Error during ${currentAction} transfer:`, error);
-        updateStatusDisplay(`Error: ${error.message}`, 'error');
+        if (error.message !== 'UserCancelled') {
+            console.error(`Error during ${currentAction} transfer:`, error);
+        }
+        // Return the current menu target as fallback
+        return `domain-details-${domainName.replace(/\./g, '-')}`;
     }
 }, 'toggle transfer out');
 
-export const toggleRenewal = requireAuthAndSubscription(async (params) => {
+export const toggleRenewal = requireAuth(async (params) => {
     const { domainName, enable, renderMenu, updateStatusDisplay } = params;
     
     // The 'enable' param comes from the dataset as a string 'true' or 'false'
@@ -513,13 +497,17 @@ export const toggleRenewal = requireAuthAndSubscription(async (params) => {
 
         if (response.ok && result.success) {
             updateStatusDisplay(`Successfully ${isEnable ? 'resumed' : 'ceased'} renewals for ${domainName}!`, 'success');
-            await listDomains({ renderMenu, updateStatusDisplay, initialMenuId: `domain-details-${domainName.replace(/\./g, '-')}` });
+            return await listDomains({ ...params, initialMenuId: `domain-details-${domainName.replace(/\./g, '-')}` });
         } else {
             throw new Error(result.error || `Failed to ${actionText}.`);
         }
     } catch (error) {
+        if (error.message === 'UserCancelled') {
+            console.log("[ToggleRenewal] UserCancelled caught, propagating.");
+            throw error; // Let menu.js handle the transition back
+        }
         console.error(`Error during ${actionText}:`, error);
-        updateStatusDisplay(`Error: ${error.message}`, 'error');
+        return `domain-details-${domainName.replace(/\./g, '-')}`;
     }
 }, 'toggle renewal');
 
@@ -535,7 +523,7 @@ export const transferInDomain = requireAuth(async (params) => {
         });
 
         if (!domainAnswer || domainAnswer.status !== 'answered' || !domainAnswer.value) {
-            throw new Error("Transfer-in was cancelled.");
+            throw new Error("UserCancelled");
         }
         const domainName = domainAnswer.value;
 
@@ -547,7 +535,7 @@ export const transferInDomain = requireAuth(async (params) => {
         });
 
         if (!authCodeAnswer || authCodeAnswer.status !== 'answered' || !authCodeAnswer.value) {
-            throw new Error("Transfer-in was cancelled.");
+            throw new Error("UserCancelled");
         }
         const authCode = authCodeAnswer.value;
 
@@ -565,16 +553,21 @@ export const transferInDomain = requireAuth(async (params) => {
 
         if (response.ok && !result.error) {
             updateStatusDisplay(`Successfully initiated transfer for ${domainName}!`, 'success');
-            await listDomains({ renderMenu, updateStatusDisplay });
+            return await listDomains(params);
         } else {
             throw new Error(result.error || 'Failed to initiate transfer.');
         }
     } catch (error) {
-        console.error("Transfer-in failed:", error);
-        updateStatusDisplay(`Error: ${error.message}`, 'error');
-        if (renderMenu) {
-            setTimeout(() => listDomains(params), 3000);
+        if (error.message === 'UserCancelled') {
+            console.log("[TransferIn] UserCancelled caught, propagating.");
+            throw error; // Let menu.js handle the transition back
         }
+        console.error("Transfer-in failed:", error);
+        return new Promise(resolve => {
+            setTimeout(async () => {
+                resolve(await listDomains(params));
+            }, 3000);
+        });
     }
 }, 'transfer in domain');
 
@@ -622,9 +615,7 @@ export const linkExternalDomain = requireAuth(async (params) => {
         });
 
         if (!deploymentAnswer || deploymentAnswer.status !== 'answered' || !deploymentAnswer.value) {
-            updateStatusDisplay('Link cancelled.', 'info');
-            listDomains(params);
-            return;
+            throw new Error("UserCancelled");
         }
 
         const { deployment_name, machine_id } = deploymentAnswer.value;
@@ -640,9 +631,7 @@ export const linkExternalDomain = requireAuth(async (params) => {
         });
 
         if (!domainAnswer || domainAnswer.status !== 'answered' || !domainAnswer.value) {
-            updateStatusDisplay('Link cancelled.', 'info');
-            listDomains(params);
-            return;
+            throw new Error("UserCancelled");
         }
         const domainName = domainAnswer.value;
 
@@ -667,17 +656,18 @@ export const linkExternalDomain = requireAuth(async (params) => {
                 type: 'options',
                 options: [{ label: 'ok', value: true }]
             });
-            await listDomains({ ...params, initialMenuId: `domain-details-${domainName.replace(/\./g, '-')}` });
+            return await listDomains({ ...params, initialMenuId: `domain-details-${domainName.replace(/\./g, '-')}` });
         } else {
             throw new Error(result.error || 'Failed to initiate link.');
         }
 
     } catch (error) {
-        console.error("External link failed:", error);
-        updateStatusDisplay(`Error: ${error.message}`, 'error');
-        if (renderMenu) {
-            setTimeout(() => listDomains(params), 3000);
+        if (error.message === 'UserCancelled') {
+            console.log("[LinkExternal] UserCancelled caught, propagating.");
+            throw error; // Let menu.js handle the transition back
         }
+        console.error("External link failed:", error);
+        return await listDomains(params);
     }
 }, 'link external domain');
 
@@ -710,10 +700,14 @@ export const viewRecords = requireAuth(async (params) => {
             backTarget: `domain-details-${domainName.replace(/\./g, '-')}`
         };
 
-        renderMenu(menuId);
+        return menuId;
     } catch (error) {
+        if (error.message === 'UserCancelled') {
+            console.log("[ViewRecords] UserCancelled caught, propagating.");
+            throw error; // Let menu.js handle the transition back
+        }
         console.error("Failed to fetch records:", error);
-        updateStatusDisplay(`Error: ${error.message}`, 'error');
+        return `domain-details-${domainName.replace(/\./g, '-')}`;
     }
 }, 'view records');
 

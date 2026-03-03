@@ -22,38 +22,52 @@ export function showClaimMembershipButton(cookieData) {
         console.log("Claiming free membership...");
         
         try {
-            const { prompt } = await import('/static/pages/prompt.js');
-            const { API_BASE_URL, fetchWithAuth } = await import('/static/main.js');
+            const { handleSubscribe } = await import('/static/menus/subscription.js');
+            const { loadConsoleView } = await import('/static/main.js');
+            const { requireAuth } = await import('/static/scripts/authenticate.js');
 
-            // 1. Initiate checkout with the promo code
-            const resp = await fetchWithAuth(`${API_BASE_URL}/create-checkout-session`, {
-                method: 'POST',
-                body: { 
-                    embedded: true,
-                    promo_code: cookieData.code 
+            // Wrap the subscription call in requireAuth to handle guest users
+            const guardedClaim = requireAuth(async (params) => {
+                const result = await handleSubscribe(params);
+
+                // If result is provided, it's the session object from the already_active check
+                if (result && result.already_active) {
+                    const { prompt } = await import('/static/pages/prompt.js');
+                    await prompt({
+                        id: 'already-subscribed-prompt',
+                        text: 'You are already subscribed.',
+                        type: 'options',
+                        options: [{ label: 'ok', value: 'ok' }]
+                    });
+                    // Stay on landing page if already active
+                } else if (result && result.error) {
+                    const { prompt } = await import('/static/pages/prompt.js');
+                    await prompt({
+                        id: 'checkout-error-prompt',
+                        text: result.error,
+                        type: 'options',
+                        options: [{ label: 'ok', value: 'ok' }]
+                    });
+                } else if (result && (result.resumed || result.status === 'completed')) {
+                    console.log("Membership claim checkout finished successfully.");
+                    // loadConsoleView(); // REMOVED: Stay on landing page after successful claim
+                }
+            }, 'claim membership');
+
+            await guardedClaim({ 
+                promoCode: cookieData.code,
+                // Fallback navigation if cancelled
+                renderMenu: (menuId) => {
+                    if (menuId === 'dashboard-menu') {
+                        loadConsoleView();
+                    }
                 }
             });
-            const data = await resp.json();
-
-            if (!resp.ok || !data.client_secret) {
-                throw new Error(data.error || 'Unable to start checkout');
-            }
-
-            // 2. Show the embedded checkout
-            const result = await prompt({
-                id: 'claim_membership_checkout',
-                text: 'Claim your free membership',
-                type: 'embedded_checkout',
-                client_secret: data.client_secret
-            });
-
-            if (result.status === 'answered' && result.value === 'completed') {
-                console.log("Membership claim checkout finished successfully.");
-                // Redirect to console view or refresh to show active membership
-                const { loadConsoleView } = await import('/static/main.js');
-                loadConsoleView();
-            }
         } catch (error) {
+            if (error.message === 'UserCancelled') {
+                console.log("Membership claim cancelled by user.");
+                return;
+            }
             console.error("Failed to claim free membership:", error);
         }
     };

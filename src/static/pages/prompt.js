@@ -18,6 +18,11 @@ function _enterPromptMode(options = {}) {
         document.body.classList.add('prompt-no-dim');
     }
     document.documentElement.classList.add('prompt-overlay-active');
+
+    // Hide any active tutorials when a prompt appears
+    try {
+        import('/static/scripts/tutorial.js').then(m => m.hideTutorial());
+    } catch (_) {}
 }
 
 /**
@@ -108,26 +113,57 @@ async function _handleDomainAvailabilityCheck(domainName, inputElement, priceDis
             const purchaseButton = document.createElement('button');
             purchaseButton.textContent = `$${result.price} / year`;
             purchaseButton.className = 'prompt-button prompt-purchase-button';
-            purchaseButton.onclick = async () => {
-                const confirmation = await prompt({
-                    id: 'domain_purchase_confirm',
-                    text: `Are you sure you want to purchase ${domainName}?`,
-                    type: 'options',
-                    options: [
-                        { label: 'yes', value: true },
-                        { label: 'no', value: false }
-                    ]
-                });
+            purchaseButton.onclick = () => {
+                // Shadow Confirmation: We don't call prompt() here because it would push a new back handler
+                // and trigger the stack restoration logic, which causes "ghosting" on back.
+                // Instead, we just swap the content of the current prompt locally.
+                const promptContentWrapper = inputElement.closest('.prompt-content-wrapper');
+                if (!promptContentWrapper) return;
 
-                if (confirmation && confirmation.status === 'answered' && confirmation.value === true) {
-                    // Resolve the original domain prompt with the necessary details.
+                const originalContent = promptContentWrapper.innerHTML;
+                
+                // 1. Clear and show "Are you sure?" locally
+                promptContentWrapper.innerHTML = `
+                    <p class="prompt-text">Are you sure you want to purchase ${domainName}?</p>
+                    <div class="prompt-options-container">
+                        <button class="prompt-option-button shadow-confirm-yes">yes</button>
+                        <button class="prompt-option-button shadow-confirm-no">no</button>
+                    </div>
+                `;
+
+                // 2. Handle "Yes" -> Resolve the parent prompt immediately
+                promptContentWrapper.querySelector('.shadow-confirm-yes').onclick = () => {
                     if (resolve) {
                         resolve({ 
                             status: 'answered', 
                             value: { domainName, price: result.price } 
                         });
                     }
-                }
+                };
+
+                // 3. Handle "No" -> Restore the original domain input UI
+                promptContentWrapper.querySelector('.shadow-confirm-no').onclick = () => {
+                    promptContentWrapper.innerHTML = '';
+                    // Re-render the original prompt text
+                    const promptTextElement = document.createElement('p');
+                    promptTextElement.innerHTML = "Enter the domain name you'd like to use (e.g., example.com):";
+                    promptTextElement.className = 'prompt-text';
+                    promptContentWrapper.appendChild(promptTextElement);
+                    
+                    // Re-create the domain input UI
+                    _createDomainInput(promptContentWrapper, { id: 'domain_name_input' }, resolve);
+                    
+                    // Restore the value if possible
+                    const newInput = promptContentWrapper.querySelector('.prompt-input-text');
+                    if (newInput) {
+                        newInput.value = domainName;
+                        // Trigger a check immediately to show the purchase button again
+                        _handleDomainAvailabilityCheck(domainName, newInput, 
+                            promptContentWrapper.querySelector('.prompt-price'), 
+                            promptContentWrapper.querySelector('#prompt-button-wrapper'), 
+                            resolve);
+                    }
+                };
             };
             buttonWrapper.appendChild(purchaseButton);
         } else {
@@ -236,6 +272,16 @@ export function clearPromptStack() {
 
 export function prompt(promptConfig) {
     return new Promise(resolve => {
+        // The Ballet: A prompt pushes its back handler exactly ONCE when it is created.
+        // This handler remains on the stack even if the prompt is interrupted by a sub-prompt.
+        if (!promptConfig.noBackHandler) {
+            pushBackHandler(() => {
+                console.log(`[Prompt] Back handler fired for '${promptConfig.id || 'unnamed'}'`);
+                console.log(`Prompt '${promptConfig.id || 'unnamed'}' cancelled via back button`);
+                _cancelCurrentPrompt();
+            });
+        }
+
         promptStack.push({ config: promptConfig, resolve });
         _processStack();
     });
@@ -258,15 +304,16 @@ function _processStack() {
     currentPromptConfig = config;
 
     _showActualPrompt(config).then(result => {
-        // Pop the back handler immediately when the prompt resolves, 
-        // but ONLY if this prompt pushed one. This must happen BEFORE 
-        // we potentially restore a previous prompt or cleanup the UI.
-        if (config && !config.noBackHandler) {
+        console.log(`[Prompt] _showActualPrompt resolved for '${config.id || 'unnamed'}' with status: ${result.status}`);
+        // The Ballet: If the user clicked a button (answered), we pop the handler.
+        // If they hit 'Back' (canceled), back.js already popped it, so we skip.
+        if (result.status === 'answered' && config && !config.noBackHandler) {
+            console.log(`[Prompt] Popping handler for answered prompt '${config.id || 'unnamed'}'`);
             popBackHandler();
         }
 
-        resolve(result);
         isPrompting = false;
+        resolve(result);
 
         // If we are clearing the stack, stop here.
         if (window.__clearingPromptStack) {
@@ -685,17 +732,6 @@ function _showActualPrompt(promptConfig) {
     } catch (_) {}
     
     return new Promise(resolve => {
-        // Define the cancel/back behavior for this prompt
-        const cancelPrompt = () => {
-            console.log(`Prompt '${promptConfig.id || 'unnamed'}' cancelled via back button`);
-            _cancelCurrentPrompt();
-        };
-
-        // Push this prompt's cancellation handler onto the stack
-        if (!promptConfig.noBackHandler) {
-            pushBackHandler(cancelPrompt);
-        }
-
         currentResolve = resolve;
 
         const { id, text, type, options, defaultValue, inputStatus, context, imageUrl } = promptConfig;

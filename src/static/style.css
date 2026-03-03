@@ -288,19 +288,44 @@ body.prompt-overlay-active #console-container {
     /* text-decoration: none; Ensure no underline */
 }
 
+/* Consistent rainbow for the membership button */
+#claim-membership-button {
+    position: relative;
+    background: linear-gradient(90deg, #ff0000, #ff7300, #fffb00, #48ff00, #00ffd5, #002bff, #7a00ff, #ff00c8, #ff0000);
+    background-size: 200% auto;
+    animation: rainbow-bg-shift 4s linear infinite;
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    color: white;
+    z-index: 1;
+    overflow: hidden;
+}
+
+#claim-membership-button::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: white;
+    opacity: 0;
+    z-index: -1;
+    transition: opacity 0.3s ease;
+}
+
 /* Special hover for the membership button */
 #claim-membership-button:hover {
-    background: linear-gradient(45deg, #ff0000, #ff7300, #fffb00, #48ff00, #00ffd5, #002bff, #7a00ff, #ff00c8, #ff0000);
-    background-size: 200% 200%;
-    animation: rainbow-bg-shift 3s linear infinite;
-    color: white !important;
-    border-color: transparent;
-    transition: background-color 0.5s ease;
+    color: black !important;
+    border-color: white;
+}
+
+#claim-membership-button:hover::before {
+    opacity: 1; /* Fade the white solid color IN over the rainbow background */
 }
 
 @keyframes rainbow-bg-shift {
-    0% { background-position: 0% 50%; }
-    100% { background-position: 200% 50%; }
+    0% { background-position: 0% 0%; }
+    100% { background-position: -200% 0%; }
 }
 
 /* Google Verification Notice */
@@ -643,18 +668,17 @@ body.prompt-overlay-active #console-container {
 
 .rainbow-text > span {
     animation: rainbow-cycle 2s linear infinite;
-    animation-fill-mode: backwards; /* Apply the first keyframe's style before the animation starts */
 }
 
 @keyframes rainbow-cycle {
-    0%   { color: red; }
-    15%  { color: orange; }
-    30%  { color: yellow; }
-    45%  { color: green; }
-    60%  { color: blue; }
-    75%  { color: indigo; }
-    90%  { color: violet; }
-    100% { color: red; }
+    0%   { color: hsl(0, 100%, 50%); }
+    15%  { color: hsl(54, 100%, 50%); }
+    30%  { color: hsl(108, 100%, 50%); }
+    45%  { color: hsl(162, 100%, 50%); }
+    60%  { color: hsl(216, 100%, 50%); }
+    75%  { color: hsl(270, 100%, 50%); }
+    90%  { color: hsl(324, 100%, 50%); }
+    100% { color: hsl(360, 100%, 50%); }
 }
 
 @keyframes wave {

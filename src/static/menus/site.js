@@ -158,11 +158,11 @@ function cacheAllSiteMenus(sites) {
 }
 
 async function _listSitesLogic(params) {
-    const { renderMenu, updateStatusDisplay } = params;
-        updateStatusDisplay('fetching sites...', 'info');
-        const sites = await fetchAndProcessDeployments();
-        cacheAllSiteMenus(sites);
-        renderMenu('site-list-menu');
+    const { updateStatusDisplay } = params;
+    updateStatusDisplay('fetching sites...', 'info');
+    const sites = await fetchAndProcessDeployments();
+    cacheAllSiteMenus(sites);
+    return 'site-list-menu';
 }
 
 export const listSites = requireAuthAndSubscription(_listSitesLogic, 'view sites'); 
@@ -239,17 +239,15 @@ export const destroyDeployment = requireAuthAndSubscription(async (params) => {
         updateStatusDisplay(result.message, 'success');
         
         // After destruction, refresh the list of sites.
-        // Pass both renderMenu and updateStatusDisplay as required by _listSitesLogic.
-        await _listSitesLogic({ renderMenu, updateStatusDisplay });
+        return await _listSitesLogic(params);
 
     } catch (e) {
-        console.error('Destroy error:', e);
-        updateStatusDisplay(`Could not destroy: ${e.message}`, 'error');
-        // The generic handler will clear the rainbow text, but we should
-        // ensure the title is reset to something sensible on error.
-        if (menuTitle) {
-            menuTitle.textContent = 'error';
+        if (e.message === 'UserCancelled') {
+            throw e; // Let menu.js handle the transition back
         }
+        console.error('Destroy error:', e);
+        // Return to the current list as fallback
+        return await _listSitesLogic(params);
     }
 }, 'destroy a deployment');
 
@@ -277,11 +275,13 @@ export async function destroySite(params) {
         if (!response.ok) throw new Error(data.error || 'failed to destroy');
         updateStatusDisplay('destroy requested', 'success');
         
-        await _listSitesLogic({ renderMenu });
-        updateStatusDisplay('', 'info');
+        return await _listSitesLogic(params);
     } catch (e) {
+        if (e.message === 'UserCancelled') {
+            throw e; // Let menu.js handle the transition back
+        }
         console.error('destroy error:', e);
-        updateStatusDisplay(`could not destroy: ${e.message}`, 'error');
+        return await _listSitesLogic(params);
     }
 }
 

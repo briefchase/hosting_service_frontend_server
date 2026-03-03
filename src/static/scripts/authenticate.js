@@ -40,6 +40,10 @@ let defaultAuthRedirect = () => {
 };
 let onAuthSuccessCallback = null; // New callback
 
+// The Ballet: Resolvers for transparently resuming paused actions
+let pendingAuthResolve = null;
+let pendingSubResolve = null;
+
 /**
  * Called from the main application entry point to configure the default
  * action after a successful login when no other action is pending.
@@ -71,9 +75,6 @@ export function configureAuthSuccessCallback(callbackFn) {
 async function handleAuthenticationSuccess(userSession) {
     window.__reauthInProgress = false; // Clear re-auth state
 
-    // Pop the re-auth back handler we pushed in initiateReauthUI
-    // The Ballet: The finally block in menu.js will handle this
-
     // Run the immediate success callback if it's configured
     if (onAuthSuccessCallback) {
         try {
@@ -83,25 +84,38 @@ async function handleAuthenticationSuccess(userSession) {
         }
     }
 
-    // This is now the single source of truth for post-auth actions.
-    console.log("Auth success. Checking for pending action:", window.pendingReauthAction);
+    // The Ballet: If an action was paused awaiting auth, wake it up now.
+    if (pendingAuthResolve) {
+        console.log("Auth success. Resolving transparent guard.");
+        
+        // Pop the re-auth back handler we pushed in initiateReauthUI
+        // before resolving, so the stack is clean for the resumed action.
+        const { popBackHandler, getStack } = await import('/static/scripts/back.js');
+        if (getStack().length > 0) {
+            try { popBackHandler(); } catch (_) {}
+        }
+
+        const resolve = pendingAuthResolve;
+        pendingAuthResolve = null;
+        resolve(userSession);
+        return; // The original action will take it from here
+    }
+
+    // Fallback for legacy flows or direct logins
+    console.log("Auth success. No pending transparent guard, checking legacy pending action.");
     const pendingAction = window.pendingReauthAction;
-    window.pendingReauthAction = null; // Clear immediately
+    window.pendingReauthAction = null; 
 
     if (pendingAction && typeof pendingAction.actionFn === 'function') {
         console.log('Re-executing interrupted action after successful reauth');
         try {
-            // Re-execute the stored action.
-            // Ensure we use the latest params, but preserve the original ones if needed.
             const executionParams = { ...pendingAction.params };
             await pendingAction.actionFn(executionParams);
         } catch (error) {
             console.error('Error re-executing pending action:', error);
-            // Fall back to default redirect if the pending action fails
             defaultAuthRedirect();
         }
     } else {
-        // No pending action, perform the default redirect
         defaultAuthRedirect();
     }
 }
@@ -330,10 +344,10 @@ export async function initiateReauthUI(params = {}) {
             statusEl.textContent = message;
             statusEl.className = 'menu-status-message menu-status-info';
         } else {
-            // Fail spectacularly if we can't even tell the user to sign in
-            const error = new Error("CRITICAL: UI status element missing. Cannot display sign-in prompt.");
-            console.error(error);
-            throw error;
+            // If we're on the landing page or the menu isn't loaded, 
+            // we don't need to fail spectacularly. The Google popup itself 
+            // is a clear enough indicator that sign-in is required.
+            console.log("[Auth] UI status element missing, skipping 'please sign in' message.");
         }
     }
 
@@ -408,11 +422,19 @@ export function requireAuth(actionFn, actionName) {
 
         if (!user) {
             console.log("[Auth Guard] No user found in sessionStorage, initiating reauth.");
+            
+            // The Ballet: Create a promise that resolves when authentication is successful
+            const authPromise = new Promise(resolve => {
+                pendingAuthResolve = resolve;
+            });
+
             await _initiateReauth(guarded, params);
-            // Return a promise that never resolves. This keeps the caller (menu.js)
-            // in its 'await' state, allowing the back button handler to be the 
-            // only way out (via rejection).
-            return new Promise(() => {});
+            
+            // Wait for the user to sign in
+            await authPromise;
+            
+            // Now that we're authenticated, proceed with the action
+            return await actionFn(params);
         }
 
         console.log("[Auth Guard] User found, proceeding with action.");
@@ -421,8 +443,12 @@ export function requireAuth(actionFn, actionName) {
             return await actionFn(params);
         } catch (error) {
             if (error && error.message === 'ReauthInitiated') {
+                const authPromise = new Promise(resolve => {
+                    pendingAuthResolve = resolve;
+                });
                 await _initiateReauth(guarded, params);
-                return new Promise(() => {});
+                await authPromise;
+                return await actionFn(params);
             }
             throw error;
         }
@@ -464,19 +490,37 @@ export function requireSubscription(actionFn) {
             const subscriptionData = await response.json();
             if (subscriptionData.status !== 'active') {
                 const { initializeStripe, handleSubscribe } = await import('/static/menus/subscription.js');
+                
+                // The Ballet: Create a promise that resolves when subscription is successful
+                const subPromise = new Promise(resolve => {
+                    pendingSubResolve = resolve;
+                });
+
                 try {
                     await initializeStripe();
                     
-                    // Pass the actionFn and params so handleSubscribe can resume the action
-                    // handleSubscribe will manage its own back handler (push/pop)
-                    await handleSubscribe(actionFn, params);
+                    // Pass a custom callback to handleSubscribe so it can resolve our promise
+                    // handleSubscribe will call this when checkout is complete or already active
+                    await handleSubscribe(async (res) => {
+                        if (pendingSubResolve) {
+                            console.log("[Subscription Guard] Resolving transparent guard via callback.");
+                            const resolve = pendingSubResolve;
+                            pendingSubResolve = null;
+                            resolve(res);
+                        }
+                    }, params);
                 } catch (error) {
+                    if (error && error.message === 'ReauthInitiated') {
+                        throw error;
+                    }
                     console.error("Subscription flow failed:", error);
                 }
-                // Return a promise that never resolves. This keeps the caller (menu.js)
-                // in its 'await' state, allowing the back button handler to be the 
-                // only way out (via rejection).
-                return new Promise(() => {});
+                
+                // Wait for the user to complete checkout
+                await subPromise;
+
+                // Now that they are subscribed, proceed with the original action
+                return await actionFn(params);
             }
             return await actionFn(params);
         } catch (error) {
@@ -484,10 +528,13 @@ export function requireSubscription(actionFn) {
                 // Re-throw so the outer requireAuth guard can catch it and save the pending action
                 throw error;
             }
+            if (error && error.message === 'UserCancelled') {
+                console.log("[Subscription Guard] UserCancelled caught, propagating.");
+                throw error; // Let menu.js handle the transition back silently
+            }
             console.error(`Error during subscription check:`, error);
             // Do not set the status display to technical internal errors like ReauthInitiated
             // Only show actual business logic errors.
-            updateStatusDisplay(`unable to verify subscription: ${error.message}`, "error");
             return;
         }
     };

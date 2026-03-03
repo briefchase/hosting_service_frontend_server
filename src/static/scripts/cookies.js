@@ -4,7 +4,7 @@
  */
 
 const COOKIE_NAME = 'sc_special_offer';
-const SECRET_CODE = 'dude_with_sign_2026';
+const SECRET_CODE = 'kittycat';
 
 /**
  * Sets a secret cookie with the current date and a code.
@@ -18,7 +18,8 @@ export function give_secret_cookie() {
 }
 
 /**
- * Validates existing cookies and deletes them if they are expired (not today).
+ * Validates existing cookies and deletes them if they are expired (not today)
+ * or have an incorrect code.
  * Returns the cookie data if a valid secret cookie for today exists, otherwise null.
  */
 export function check_and_cleanup_cookies() {
@@ -35,9 +36,9 @@ export function check_and_cleanup_cookies() {
                 if (data.date === today && data.code === SECRET_CODE) {
                     validData = data;
                 } else {
-                    // Delete expired or invalid cookie
+                    // Delete expired or invalid cookie (wrong date or wrong code)
                     document.cookie = `${COOKIE_NAME}=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT`;
-                    console.log("[Cookies] Expired secret cookie removed.");
+                    console.log("[Cookies] Invalid or expired secret cookie removed.");
                 }
             } catch (e) {
                 // Delete malformed cookie

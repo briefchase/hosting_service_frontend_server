@@ -43,7 +43,13 @@ function createAndShowTutorial(text, anchorSelector, position = 'top-right') {
     // Randomize animation duration slightly (+/- 0.2s)
     const baseDuration = 6;
     const variation = (Math.random() * 0.4) - 0.2;
-    tutorialContent.style.animationDuration = `${(baseDuration + variation).toFixed(2)}s`;
+    const duration = baseDuration + variation;
+    tutorialContent.style.animationDuration = `${duration.toFixed(2)}s`;
+    
+    // Pre-warm the hover-up-down animation with a random negative delay
+    // so they start at different points in their cycle and out of sync.
+    const randomDelay = Math.random() * duration;
+    tutorialContent.style.animationDelay = `-${randomDelay.toFixed(2)}s`;
     
     tutorialContainer.appendChild(tutorialContent);
     document.body.appendChild(tutorialContainer);

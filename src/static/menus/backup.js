@@ -12,7 +12,7 @@ import { pushBackHandler, replaceBackHandler } from '/static/scripts/back.js';
 import { fetchSites } from '/static/scripts/api.js';
 import { prompt, clearPromptStack } from '/static/pages/prompt.js';
 import { establishWebSocketConnection } from '/static/scripts/socket.js';
-import { loadTerminalView, returnFromTerminal } from '/static/pages/terminal.js';
+import { returnFromTerminal, handleTerminalMessage } from '/static/pages/terminal.js';
 
 
 let lastFetchedDeployments = [];
@@ -85,7 +85,8 @@ function _cancelActiveRestore(reason, statusMessage) {
 
 // --- UNWRAPPED ACTIONS ---
 
-const _listDeploymentsForBackup = async ({ renderMenu, updateStatusDisplay }) => {
+const _listDeploymentsForBackup = async (params) => {
+        const { updateStatusDisplay } = params;
         updateStatusDisplay('fetching deployments...', 'info');
         const vms = await fetchSites();
         let deployments = [];
@@ -115,14 +116,12 @@ const _listDeploymentsForBackup = async ({ renderMenu, updateStatusDisplay }) =>
         lastFetchedDeployments = deployments;
 
         if (deployments.length === 0) {
-            const noDeploymentsMenu = {
+            return {
                 id: 'no-deployments-for-backup',
                 text: emptyMessage,
                 items: [],
                 backTarget: 'backup-menu'
             };
-            renderMenu(noDeploymentsMenu);
-            return;
         }
 
         const menuItems = deployments.map(deployment => ({
@@ -142,7 +141,7 @@ const _listDeploymentsForBackup = async ({ renderMenu, updateStatusDisplay }) =>
         };
 
         menus[deploymentsMenu.id] = deploymentsMenu;
-        renderMenu(deploymentsMenu);
+        return deploymentsMenu;
 };
 
 const _createScriptBackup = async ({ resourceId, renderMenu, updateStatusDisplay }) => {
@@ -173,19 +172,19 @@ const _createScriptBackup = async ({ resourceId, renderMenu, updateStatusDisplay
 
         if (response.ok) {
             updateStatusDisplay(result.message, 'success');
+            return await _listDeploymentsForBackup(params);
         } else {
             throw new Error(result.error || 'Failed to create backup');
         }
     } catch (error) {
         console.error("Error creating backup:", error);
         updateStatusDisplay(`Error: ${error.message}`, 'error');
-    } finally {
-        // After attempting backup, refresh the list of deployments.
-        await _listDeploymentsForBackup({ renderMenu, updateStatusDisplay });
+        return await _listDeploymentsForBackup(params);
     }
 };
 
-const _showRestoreMenu = async ({ renderMenu, updateStatusDisplay }) => {
+const _showRestoreMenu = async (params) => {
+    const { updateStatusDisplay } = params;
     window.dispatchEvent(new CustomEvent('deploymentstatechange', { detail: { isActive: true } }));
         updateStatusDisplay('fetching backups...', 'info');
         const response = await fetchWithAuth(`${API_BASE_URL}/list-backups`);
@@ -199,13 +198,12 @@ const _showRestoreMenu = async ({ renderMenu, updateStatusDisplay }) => {
         }
 
         if (!result.backups || result.backups.length === 0) {
-            renderMenu({
+            return {
                 id: 'no-backups-found',
                 text: 'No backups found in Google Drive.',
                 items: [],
                 backTarget: 'backup-menu'
-            });
-            return;
+            };
         }
 
         const menuItems = result.backups.map(backup => ({
@@ -225,11 +223,11 @@ const _showRestoreMenu = async ({ renderMenu, updateStatusDisplay }) => {
             backTarget: 'backup-menu'
         };
         menus[menuConfig.id] = menuConfig;
-        renderMenu(menuConfig);
+        return menuConfig;
 };
 
 const _selectMachineForRestore = async (params) => {
-    const { backupFilename, backupFileId, renderMenu, updateStatusDisplay } = params;
+    const { backupFilename, backupFileId, updateStatusDisplay } = params;
     if (!backupFilename) {
         updateStatusDisplay('Error: No backup file was selected.', 'error');
         return;
@@ -272,13 +270,12 @@ const _selectMachineForRestore = async (params) => {
         });
 
         if (lastFetchedMachines.length === 0) {
-            renderMenu({
+            return {
                 id: 'no-machines-for-restore',
                 text: emptyMessage,
                 items: menuItems, // Still show the 'new machine' option
                 backTarget: 'backup-menu'
-            });
-            return;
+            };
         }
 
         const menuConfig = {
@@ -288,12 +285,110 @@ const _selectMachineForRestore = async (params) => {
             backTarget: 'backup-menu'
         };
         menus[menuConfig.id] = menuConfig;
-        renderMenu(menuConfig);
+        return menuConfig;
 };
 
 
+// --- Phase 1: Preparation (Guarded) ---
+
+const _prepareRestore = async (params) => {
+    const { resourceId, backupFilename, backupFileId, updateStatusDisplay } = params;
+    
+    let machine;
+    if (resourceId === 'new_machine') {
+        machine = { id: 'new_machine', name: 'a new machine', zone: null };
+    } else {
+        machine = lastFetchedMachines.find(m => m.id === resourceId);
+    }
+    
+    if (!machine || !backupFilename) {
+        throw new Error('Missing machine or backup details.');
+    }
+
+    updateStatusDisplay(`initiating restore...`, 'info');
+    const response = await fetchWithAuth(`${API_BASE_URL}/restore`, {
+        method: 'POST',
+        body: { 
+            vm_id: machine.id,
+            zone: machine.zone,
+            backup_file_id: backupFileId
+        }
+    });
+
+    const result = await response.json();
+    if (!response.ok) {
+        throw new Error(result.error || result.message || 'Failed to initiate restore');
+    }
+
+    return { result, machine };
+};
+
+const guardedPrepareRestore = requireAuthAndSubscription(_prepareRestore, 'restore preparation');
+
+// --- Phase 2: Execution ---
+
+const _executeRestore = async (params, prepResult) => {
+    const { updateStatusDisplay, menuContainer, menuTitle } = params;
+    const { result, machine } = prepResult;
+
+    window.dispatchEvent(new CustomEvent('deploymentstatechange', { detail: { isActive: true } }));
+    document.body.classList.add('deployment-loading');
+    updateAccountButtonVisibility(false);
+    updateSiteTitleVisibility(false);
+
+    if (menuContainer) {
+        const listContainer = menuContainer.querySelector('#menu-list-container');
+        if (listContainer) {
+            listContainer.innerHTML = '';
+            const loadingGif = document.createElement('img');
+            loadingGif.src = '/static/resources/happy-cat.gif';
+            loadingGif.alt = 'Loading...';
+            loadingGif.className = 'loading-gif';
+            listContainer.appendChild(loadingGif);
+        }
+        if (menuTitle) {
+            menuTitle.style.display = '';
+            menuTitle.textContent = 'restoring';
+            menuTitle.classList.add('rainbow-text');
+        }
+
+        // NOW we end the generic "Loading Mode" so our custom UI can take over.
+        delete menuContainer.dataset.loading;
+    }
+
+    try {
+        updateStatusDisplay('Restore initiated. Connecting to live log...', 'info');
+
+        const ws = await establishWebSocketConnection(
+            result.websocket_url,
+            (ws, event) => updateStatusDisplay('Connected. Waiting for server...', 'info'),
+            null,
+            (event) => {
+                updateStatusDisplay('Connection error.', 'error');
+                _cancelActiveRestore('websocket_error');
+            },
+            (event) => {},
+            updateStatusDisplay
+        );
+
+        if (!ws) {
+            throw new Error("Failed to establish WebSocket connection.");
+        }
+
+        activeRestore.ws = ws;
+        activeRestore.deploymentId = result.deployment_id;
+        _communicateRestore(ws, params);
+
+    } catch (error) {
+        if (error.message !== 'UserCancelled') {
+            console.error("Error executing restore:", error);
+        }
+        _cancelActiveRestore(`execution_error: ${error.message}`);
+    }
+};
+
 const _confirmRestore = async (params) => {
-    const { resourceId, backupFilename, backupFileId, updateStatusDisplay, menuContainer, menuTitle } = params;
+    const { resourceId, backupFilename, backupFileId, updateStatusDisplay } = params;
     
     let machine;
     if (resourceId === 'new_machine') {
@@ -304,10 +399,6 @@ const _confirmRestore = async (params) => {
     
     if (!machine) {
         updateStatusDisplay('Could not find machine details.', 'error');
-        return;
-    }
-    if (!backupFilename) {
-        updateStatusDisplay('Backup file is missing.', 'error');
         return;
     }
 
@@ -326,73 +417,17 @@ const _confirmRestore = async (params) => {
         return;
     }
 
-    // --- Start: Show Loading GIF & Rainbow Text ---
-    window.dispatchEvent(new CustomEvent('deploymentstatechange', { detail: { isActive: true } }));
-    updateStatusDisplay('Starting restore...', 'info');
-    document.body.classList.add('deployment-loading');
-    updateAccountButtonVisibility(false);
-    updateSiteTitleVisibility(false);
-
-    if (menuContainer) {
-        const listContainer = menuContainer.querySelector('#menu-list-container');
-        if (listContainer) {
-            listContainer.innerHTML = ''; // Clear the menu buttons
-            const loadingGif = document.createElement('img');
-            loadingGif.src = '/static/resources/happy-cat.gif';
-            loadingGif.alt = 'Loading...';
-            loadingGif.className = 'loading-gif';
-            listContainer.appendChild(loadingGif);
-        }
-        if (menuTitle) {
-            menuTitle.textContent = 'restoring';
-            menuTitle.classList.add('rainbow-text');
-        }
-    }
-    // --- End: Show Loading GIF & Rainbow Text ---
-
     try {
-        updateStatusDisplay(`initiating restore...`, 'info');
-        const response = await fetchWithAuth(`${API_BASE_URL}/restore`, {
-            method: 'POST',
-            body: { 
-                vm_id: machine.id,
-                zone: machine.zone,
-                backup_file_id: backupFileId
-            }
-        });
-
-        const result = await response.json();
-
-        if (!response.ok) {
-            throw new Error(result.error || result.message || 'Failed to initiate restore');
-        }
-
-        updateStatusDisplay('Restore initiated. Connecting to live log...', 'info');
-
-        const ws = await establishWebSocketConnection(
-            result.websocket_url,
-            (ws, event) => updateStatusDisplay('Connected. Waiting for server...', 'info'),
-            null, // onMessage is handled by _communicateRestore
-            (event) => {
-                updateStatusDisplay('Connection error.', 'error');
-                _cancelActiveRestore('websocket_error');
-            },
-            (event) => { /* No status on normal close */ },
-            updateStatusDisplay
-        );
-
-        if (!ws) {
-            throw new Error("Failed to establish WebSocket connection.");
-        }
-
-        activeRestore.ws = ws;
-        activeRestore.deploymentId = result.deployment_id;
-        _communicateRestore(ws, params);
-
+        // Phase 1: Prepare (Guarded, organically ends Loading Mode on resolution)
+        const prepResult = await guardedPrepareRestore(params);
+        
+        // Phase 2: Execute (Custom UI takes over)
+        // The Ballet: We do NOT await this call. By resolving _confirmRestore now,
+        // we allow the generic loading mode in menu.js to finish naturally.
+        _executeRestore(params, prepResult);
     } catch (error) {
-        console.error("Error initiating restore:", error);
-        updateStatusDisplay(`Error: ${error.message}`, 'error');
-        _cancelActiveRestore(`initiation_error: ${error.message}`);
+        if (error.message === 'UserCancelled') return;
+        console.error(`Restore failed:`, error);
     }
 };
 
@@ -419,19 +454,32 @@ async function _communicateRestore(ws, params) {
         if (result && result.status === 'answered' && result.value === true) {
             clearPromptStack();
             _cancelActiveRestore("user_cancelled_via_prompt", "Restore cancelled by user.");
+        } else {
+            // The Ballet: If the user says 'no', we must re-push the handler 
+            // because executeBackHandler popped it before calling us.
+            pushBackHandler(restoreBackButtonHandler);
         }
     };
     
+    // The Ballet: Phase 1 has resolved, organically ending the generic loading mode.
+    // We now push our specialized confirmation handler onto a clean stack.
     pushBackHandler(restoreBackButtonHandler);
 
     ws.onmessage = async (event) => {
-        try {
-            const data = JSON.parse(event.data);
-            const { event: eventName, payload } = data;
+        const data = JSON.parse(event.data);
+        const { event: eventName, payload } = data;
 
+        try {
             switch (eventName) {
                 case 'UPDATE_STATUS':
-                    handleUpdateStatusEvent(payload);
+                    const messageText = payload.text || JSON.stringify(payload);
+                    const level = payload.level || 'info';
+
+                    if (payload.view === 'terminal') {
+                        handleTerminalMessage(messageText, level, ws);
+                    } else {
+                        updateStatusDisplay(messageText, level);
+                    }
                     break;
                 case 'PROMPT_USER':
                     await handlePromptUserEvent(payload);
@@ -452,24 +500,16 @@ async function _communicateRestore(ws, params) {
         }
     };
 
-    function handleUpdateStatusEvent(payload) {
-        const messageText = payload.text || JSON.stringify(payload);
-        const level = payload.level || 'info';
-
-        if (payload.view === 'terminal') {
-            if (!terminalLoaded && !terminalLoading) {
-                loadAndSwitchToTerminal(messageText, level);
-            } else if (terminalLoading) {
-                terminalQueue.push({ text: messageText, level: level });
-            } else if (terminalApi) {
-                terminalApi.addOutput(messageText, level);
-            }
-        } else {
-            updateStatusDisplay(messageText, level);
-        }
-    }
-    
     async function handlePromptUserEvent(payload) {
+        // End the generic loading mode when the first prompt appears
+        if (document.body.classList.contains('deployment-loading')) {
+            document.body.classList.remove('deployment-loading');
+            const menuContainer = document.getElementById('menu-container');
+            if (menuContainer) {
+                delete menuContainer.dataset.loading;
+            }
+        }
+
         if (payload.url) {
             const { openPopup } = await import('/static/scripts/popup.js');
             openPopup(payload.url);
@@ -526,17 +566,13 @@ async function _communicateRestore(ws, params) {
                 // Set a simple back button to return to the menu.
                 // pushBackHandler(() => returnFromTerminal({ menuId: 'backup-menu' }));
 
-    // Re-enable terminal input to signal completion.
-    if (terminalApi) {
-        terminalApi.enableInput();
-        terminalApi.addOutput("Restore complete. Press back to return to the menu.", "success");
-    }
+                handleTerminalMessage("Restore complete. Press back to return to the menu.", "success", ws);
 
-    // Set a simple back button to return to the menu.
-    // The Ballet: We replace the current terminal handler with a return handler
-    replaceBackHandler(() => returnFromTerminal({ menuId: 'backup-menu' }));
+                // Set a simple back button to return to the menu.
+                // The Ballet: We replace the current terminal handler with a return handler
+                replaceBackHandler(() => returnFromTerminal({ menuId: 'backup-menu' }));
 
-    // Mark restore as no longer active.
+                // Mark restore as no longer active.
                 activeRestore.ws = null;
                 activeRestore.deploymentId = null;
                 window.dispatchEvent(new CustomEvent('deploymentstatechange', { detail: { isActive: false } }));
@@ -544,39 +580,10 @@ async function _communicateRestore(ws, params) {
             }
         });
     }
-
-    async function loadAndSwitchToTerminal(initialMessage, initialLevel) {
-        if (terminalLoading || terminalLoaded) return;
-        terminalLoading = true;
-        document.body.classList.remove('deployment-loading');
-        
-        try {
-            const { loadTerminalView } = await import('/static/pages/terminal.js');
-            terminalApi = await loadTerminalView({
-                existingWs: ws,
-                hideInput: true
-            });
-
-            if (terminalApi) {
-                terminalApi.addOutput(initialMessage, initialLevel);
-                terminalLoaded = true;
-            }
-
-            if (terminalApi && terminalQueue.length > 0) {
-                for (const queued of terminalQueue.splice(0)) {
-                    terminalApi.addOutput(queued.text, queued.level);
-                }
-            }
-        } catch (error) {
-            console.error("Error loading terminal view:", error);
-            updateStatusDisplay(`Error loading terminal: ${error.message}`, 'error');
-        } finally {
-            terminalLoading = false;
-        }
-    }
 }
 
-const _showScheduleMenu = async ({ renderMenu, updateStatusDisplay }) => {
+const _showScheduleMenu = async (params) => {
+    const { updateStatusDisplay } = params;
     window.dispatchEvent(new CustomEvent('deploymentstatechange', { detail: { isActive: true } }));
         updateStatusDisplay('fetching deployments...', 'info');
         const vms = await fetchSites({ include_schedule: true });
@@ -610,14 +617,12 @@ const _showScheduleMenu = async ({ renderMenu, updateStatusDisplay }) => {
         lastFetchedDeployments = deployments;
 
         if (deployments.length === 0) {
-            const noDeploymentsMenu = {
+            return {
                 id: 'no-deployments-for-schedule',
                 text: emptyMessage,
                 items: [],
                 backTarget: 'backup-menu'
             };
-            renderMenu(noDeploymentsMenu);
-            return;
         }
 
         const menuItems = deployments.map(deployment => ({
@@ -637,10 +642,11 @@ const _showScheduleMenu = async ({ renderMenu, updateStatusDisplay }) => {
         };
         
         menus[deploymentsMenu.id] = deploymentsMenu;
-        renderMenu(deploymentsMenu);
+        return deploymentsMenu;
 };
 
-const _promptBackupSchedule = async ({ resourceId, updateStatusDisplay, renderMenu, menuContainer, menuTitle }) => {
+const _promptBackupSchedule = async (params) => {
+    const { resourceId, updateStatusDisplay } = params;
     const deployment = lastFetchedDeployments.find(d => d.id === resourceId);
     if (!deployment) {
         updateStatusDisplay('Could not find deployment details. Please try again.', 'error');
@@ -669,19 +675,18 @@ const _promptBackupSchedule = async ({ resourceId, updateStatusDisplay, renderMe
     });
 
     if (result.status === 'answered' && result.value) {
-        await _setBackupSchedule({
+        return await _setBackupSchedule({
             deployment,
             interval: result.value.interval,
-            updateStatusDisplay,
-            renderMenu
+            updateStatusDisplay
         });
     } else {
         // User cancelled the prompt, return to the schedule list.
-        await _showScheduleMenu({ renderMenu, updateStatusDisplay });
+        return await _showScheduleMenu(params);
     }
 };
 
-const _setBackupSchedule = async ({ deployment, interval, updateStatusDisplay, renderMenu }) => {
+const _setBackupSchedule = async ({ deployment, interval, updateStatusDisplay }) => {
     try {
         updateStatusDisplay('updating schedule...', 'info');
         const schedulePayload = {
@@ -706,15 +711,25 @@ const _setBackupSchedule = async ({ deployment, interval, updateStatusDisplay, r
         console.error("Error setting backup schedule:", error);
         updateStatusDisplay(`Error: ${error.message}`, 'error');
     } finally {
-        // Clean up loading UI and refresh the schedule list menu.
+        // Clean up loading UI and return the schedule list menu target.
         document.body.classList.remove('deployment-loading');
         // The deploymentstatechange flag remains true, navigation back will clear it.
-        await _showScheduleMenu({ renderMenu, updateStatusDisplay });
+        return await _showScheduleMenu({ updateStatusDisplay });
     }
 };
 
 
 // --- EXPORTED, GUARDED ACTIONS ---
+
+async function _handleRestoreAction(params) {
+    // Phase 1: Prepare (Guarded, organically ends Loading Mode on resolution)
+    const prepResult = await _prepareRestore(params);
+    
+    // Phase 2: Execute (Custom UI takes over)
+    // The Ballet: We do NOT await this call. By resolving _handleRestoreAction now,
+    // we allow the generic loading mode in menu.js to finish naturally.
+    _executeRestore(params, prepResult);
+}
 
 export const listDeploymentsForBackup = requireAuthAndSubscription(
     _listDeploymentsForBackup,
@@ -737,7 +752,7 @@ export const selectMachineForRestore = requireAuthAndSubscription(
 );
 
 export const confirmRestore = requireAuthAndSubscription(
-    _confirmRestore,
+    _handleRestoreAction,
     "restore from backup"
 );
 

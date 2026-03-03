@@ -16,7 +16,7 @@ import { updateStatusDisplay, renderMenu } from '/static/pages/menu.js';
 import { pushBackHandler, popBackHandler, replaceBackHandler } from '/static/scripts/back.js';
 import { requireAuthAndSubscription } from '/static/scripts/authenticate.js';
 import { purchaseDomain } from '/static/scripts/api.js';
-import { returnFromTerminal } from '/static/pages/terminal.js';
+import { handleTerminalMessage } from '/static/pages/terminal.js';
 
 
 let currentProjectId = null;
@@ -37,10 +37,6 @@ function cancelActiveDeployment(reason, statusMessage) {
     console.log(`[DEPLOY CANCELLATION] Reason: ${reason}. Deployment ID: ${activeDeployment.deploymentId}`);
     window.dispatchEvent(new CustomEvent('deploymentstatechange', { detail: { isActive: false } }));
     document.body.classList.remove('deployment-loading');
-    
-    // Explicitly clean up UI state that might have been set by the terminal view
-    document.body.classList.remove('terminal-view-active');
-    document.body.classList.remove('overlay-active');
     
     const { ws, deploymentId } = activeDeployment;
 
@@ -65,12 +61,16 @@ function cancelActiveDeployment(reason, statusMessage) {
         }
     }
 
-    // cleanupDeployUI() is not needed as loadConsoleView rebuilds the DOM from scratch.
-    
-    console.log("[DEPLOY CANCELLATION] Navigating back to deploy-menu via loadConsoleView");
-    loadConsoleView({ 
+    const params = { 
         menuId: 'deploy-menu'
-    });
+    };
+    
+    // If the terminal is active, we need to exit it cleanly first
+    if (document.body.classList.contains('terminal-view-active')) {
+        returnFromTerminal(params);
+    } else {
+        loadConsoleView(params);
+    }
     
     activeDeployment.ws = null;
     activeDeployment.deploymentId = null;
@@ -86,6 +86,7 @@ menus['deploy-menu'] = {
             text: 'simple', 
             type: 'button', 
             action: 'handleDeploySimple',
+            showLoading: true,
             tooltip: 'fast, feature complete, skips dumb questions (reccomended)'
         },
         /*{ 
@@ -100,6 +101,7 @@ menus['deploy-menu'] = {
             text: 'advanced', 
             type: 'button', 
             action: 'handleDeployAdvanced',
+            showLoading: true,
             tooltip: 'asks unimportant questions scenic route (fun)' 
         },
     ],
@@ -115,8 +117,43 @@ menus['deploy-menu'] = {
 };
 
 // --- Deployment Initiation ---
-async function _initiateDeployment(params = {}, deploymentType) {
-    updateStatusDisplay(`Starting deployment…`, 'info');
+
+/**
+ * Phase 1: Preparation (Guarded by Auth/Sub)
+ * This function handles the initial HTTP call to create the deployment.
+ * It resolves when the server acknowledges the request, which organically 
+ * ends the generic "Loading Mode" in menu.js.
+ */
+async function _prepareDeployment(prepParams) {
+    const { params, deploymentType } = prepParams;
+    updateStatusDisplay(`Preparing deployment…`, 'info');
+    
+    const response = await fetchWithAuth(`${API_BASE_URL}/deploy`, {
+        method: 'POST',
+        body: { ...params, task: deploymentType }
+    });
+
+    let result = null;
+    try {
+        result = await response.json();
+    } catch(_) { result = {}; }
+
+    if (!response.ok) {
+        const serverError = (result && (result.error || result.message)) ? (result.error || result.message) : null;
+        const errorMsg = serverError || response.statusText || "Unknown error during deployment request.";
+        throw new Error(errorMsg);
+    }
+
+    return result; // Contains websocket_url and deployment_id
+}
+
+/**
+ * Phase 2: Execution
+ * This function takes over after preparation is complete.
+ * It injects the "cat guy" and starts the WebSocket communication.
+ */
+async function _executeDeployment(prepParams, prepResult) {
+    const { params, deploymentType } = prepParams;
     window.dispatchEvent(new CustomEvent('deploymentstatechange', { detail: { isActive: true } }));
     document.body.classList.add('deployment-loading');
 
@@ -124,7 +161,6 @@ async function _initiateDeployment(params = {}, deploymentType) {
     updateSiteTitleVisibility(false); // Hide site title during deployment
     
     // Register the master back button handler for the entire deployment.
-    // This prompts for confirmation before exiting.
     const deploymentBackButtonHandler = async () => {
         console.log("[Deployment] Back button pressed, showing exit confirmation.");
         
@@ -143,9 +179,15 @@ async function _initiateDeployment(params = {}, deploymentType) {
             console.log("[Deployment] User confirmed exit, cancelling deployment.");
             clearPromptStack();
             cancelActiveDeployment("user_cancelled_via_prompt", "Deployment cancelled by user.");
+        } else {
+            // The Ballet: If the user says 'no', we must re-push the handler 
+            // because executeBackHandler popped it before calling us.
+            pushBackHandler(deploymentBackButtonHandler);
         }
     };
     
+    // The Ballet: Phase 1 has resolved, organically ending the generic loading mode.
+    // We now push our specialized confirmation handler onto a clean stack.
     pushBackHandler(deploymentBackButtonHandler);
 
     // --- START: Show Loading GIF & Rainbow Text ---
@@ -159,93 +201,68 @@ async function _initiateDeployment(params = {}, deploymentType) {
             loadingGif.className = 'loading-gif'; // Add a class for styling
             listContainer.appendChild(loadingGif);
         }
-        // Also update the menu title
+        // Also update and show the menu title
         if (params.menuTitle) {
+            params.menuTitle.style.display = ''; 
             params.menuTitle.textContent = 'deploying';
             params.menuTitle.classList.add('rainbow-text');
         }
     }
     // --- END: Show Loading GIF & Rainbow Text ---
 
-    const user = getUser(); // Still need user for initial call
-
     try {
-        // Step 1: Initial HTTP call to the /deploy endpoint
-        updateStatusDisplay(`Preparing deployment…`, 'info');
-        // Use shared auth wrapper to benefit from silent reauth
-        const response = await fetchWithAuth(`${API_BASE_URL}/deploy`, {
-            method: 'POST',
-            body: { ...params, task: deploymentType }
-        });
-
-        let result = null;
-        try {
-            result = await response.json();
-        } catch(_) { result = {}; }
-
-        if (!response.ok) {
-            const serverError = (result && (result.error || result.message)) ? (result.error || result.message) : null;
-            const errorMsg = serverError || response.statusText || "Unknown error during deployment request.";
-            updateStatusDisplay(`Error initiating deployment for ${deploymentType}: ${errorMsg}`, 'error');
-            return;
-        }
-
-        updateStatusDisplay(`Deployment created. Connecting…`, 'info');
-
-        // Step 2: Establish WebSocket connection
         updateStatusDisplay(`Connecting…`, 'info');
         const ws = await establishWebSocketConnection(
-            result.websocket_url, 
+            prepResult.websocket_url, 
             (ws, event) => {
-                // onOpen callback
                 updateStatusDisplay(`Connected. Waiting for server…`, 'info');
             },
-            null, // onMessage - will be set up in communicate()
+            null, 
             (event) => {
-                // onError callback
                 updateStatusDisplay(`Connection error.`, 'error');
                 cancelActiveDeployment('websocket_error');
             },
-            (event) => {
-                // onClose callback
-                // Intentionally no status message on normal close
-            },
-            updateStatusDisplay // statusCallback
+            (event) => {},
+            updateStatusDisplay 
         );
         
         if (!ws) {
-            const errorMsg = "Failed to establish WebSocket connection.";
-            updateStatusDisplay(errorMsg, 'error');
-            return;
+            throw new Error("Failed to establish WebSocket connection.");
         }
 
-        // Step 3: Start the communication/prompt flow. The terminal view will be loaded
-        // by the `communicate` function when it receives the first 'terminal' message.
         activeDeployment.ws = ws;
-        activeDeployment.deploymentId = result.deployment_id;
-        communicate(ws, result.deployment_id);
+        activeDeployment.deploymentId = prepResult.deployment_id;
+        communicate(ws, prepResult.deployment_id);
 
     } catch (error) {
-        const errorMsg = error.message || "An unknown error occurred during deployment initiation.";
-        updateStatusDisplay(`Deployment error: ${errorMsg}`, 'error');
-        console.error(`Deployment initiation exception for ${deploymentType}:`, error);
-        // activeDeployment might be partially set, cancelActiveDeployment handles this
-        cancelActiveDeployment(`initiation_error: ${error.message}`);
+        if (error.message !== 'UserCancelled') {
+            console.error(`Deployment execution exception for ${deploymentType}:`, error);
+        }
+        cancelActiveDeployment(`execution_error: ${error.message}`);
     }
 }
 
-
 // --- Action Handlers ---
+
+async function _handleDeployAction(prepParams) {
+    // Phase 1: Prepare (Guarded, organically ends Loading Mode on resolution)
+    const prepResult = await _prepareDeployment(prepParams);
+    
+    // Phase 2: Execute (Custom UI takes over)
+    // The Ballet: We do NOT await this call. By resolving handleDeployAction now,
+    // we allow the generic loading mode in menu.js to finish naturally.
+    _executeDeployment(prepParams, prepResult);
+}
 
 // Action handler for advanced deployment
 export const handleDeployAdvanced = requireAuthAndSubscription(
-    (params) => _initiateDeployment(params, 'advanced'),
+    (params) => _handleDeployAction({ params, deploymentType: 'advanced' }),
     'advanced deployment'
 );
 
 // Action handler for simple deployment
 export const handleDeploySimple = requireAuthAndSubscription(
-    (params) => _initiateDeployment(params, 'simple'),
+    (params) => _handleDeployAction({ params, deploymentType: 'simple' }),
     'simple deployment'
 );
 
@@ -262,26 +279,22 @@ async function communicate(ws, deploymentId) {
   const terminalQueue = [];
    
     ws.onmessage = async (event) => {
-        // If the terminal view is active, delegate all message handling to its
-        // specialized processor and stop further execution in this handler.
-        if (terminalApi) {
-            handleTerminalMessage(event, {
-                printLine: terminalApi.addOutput,
-                enableInput: terminalApi.enableInput,
-                disableInput: terminalApi.disableInput,
-            });
-            return; // <-- CRITICAL FIX: Prevents double-processing.
-        }
+        const data = JSON.parse(event.data);
+        const { event: eventName, payload } = data;
 
-        // The original, pre-terminal logic for prompts and status updates
-        // that happen before the terminal view is loaded.
         try {
-            const data = JSON.parse(event.data);
-            const { event: eventName, payload } = data;
-
             switch (eventName) {
                 case 'UPDATE_STATUS':
-                    handleUpdateStatusEvent(payload);
+                    const messageText = payload.text || JSON.stringify(payload);
+                    const level = payload.level || 'info';
+
+                    // Check if the message is intended for the terminal view
+                    if (payload.view === 'terminal') {
+                        handleTerminalMessage(messageText, level, ws);
+                    } else {
+                        // This is a standard, pre-terminal status update
+                        updateStatusDisplay(messageText, level);
+                    }
                     break;
                 case 'PROMPT_USER':
                     await handlePromptUserEvent(payload);
@@ -301,67 +314,6 @@ async function communicate(ws, deploymentId) {
             cancelActiveDeployment(`ws_message_error: ${error.message}`);
         }
     };
-
-    function handleUpdateStatusEvent(payload) {
-        const messageText = payload.text || JSON.stringify(payload);
-        const level = payload.level || 'info';
-
-        // Check if the message is intended for the terminal view
-        if (payload.view === 'terminal') {
-            if (!terminalLoaded) {
-                // If a load is already in progress, buffer the message
-                if (terminalLoading) {
-                    terminalQueue.push({ text: messageText, level: level });
-                    return;
-                }
-                // Otherwise, initiate the terminal view load
-                loadAndSwitchToTerminal(messageText, level);
-            } else {
-                // Terminal already loaded, just add output
-                if (terminalApi) {
-                    terminalApi.addOutput(messageText, level);
-                }
-            }
-        } else {
-            // This is a standard, pre-terminal status update
-            updateStatusDisplay(messageText, level);
-        }
-    }
-    
-    async function loadAndSwitchToTerminal(initialMessage, initialLevel) {
-        if (terminalLoading || terminalLoaded) return;
-
-        terminalLoading = true;
-        document.body.classList.remove('deployment-loading');
-        
-        try {
-            terminalApi = await loadTerminalView({
-                existingWs: ws,
-                targetWebsocketPath: 'unused_since_ws_is_provided',
-                hideInput: true
-            });
-
-            if (terminalApi) {
-                terminalApi.addOutput(initialMessage, initialLevel);
-                terminalLoaded = true;
-            }
-            
-            // The correct handler is already set at the start of `communicate`, so this is no longer needed.
-            // pushBackHandler is called in loadTerminalView
-
-            // Flush any messages that arrived while loading
-            if (terminalApi && terminalQueue.length > 0) {
-                for (const queued of terminalQueue.splice(0)) {
-                    terminalApi.addOutput(queued.text, queued.level);
-                }
-            }
-        } catch (error) {
-            console.error("Error loading terminal view:", error);
-            updateStatusDisplay(`Error loading terminal: ${error.message}`, 'error');
-        } finally {
-            terminalLoading = false;
-        }
-    }
 
     async function handlePromptUserEvent(payload) {
         // If the prompt payload has a URL, open it in a popup.
@@ -448,11 +400,7 @@ async function communicate(ws, deploymentId) {
             } else {
                 // User clicked OK. Leave them in the terminal.
                 
-                // Re-enable terminal input to signal completion.
-                if (terminalApi) {
-                    terminalApi.enableInput();
-                    terminalApi.addOutput("Deployment complete. Press back to return to the menu.", "success");
-                }
+                handleTerminalMessage("Deployment complete. Press back to return to the menu.", "success", ws);
 
                 // Set a simple back button to return to the menu.
                 // The Ballet: We replace the current terminal handler with a return handler

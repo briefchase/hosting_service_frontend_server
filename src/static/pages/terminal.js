@@ -3,7 +3,7 @@
 import { API_BASE_URL } from '/static/main.js';
 import { getUser } from '/static/scripts/authenticate.js';
 import { establishWebSocketConnection } from '/static/scripts/socket.js'; // Import the new function
-import { pushBackHandler, popBackHandler, replaceBackHandler } from '/static/scripts/back.js';
+import { pushBackHandler, popBackHandler, replaceBackHandler, getStack } from '/static/scripts/back.js';
 import { prompt } from '/static/pages/prompt.js';
 import { positionMusicControls } from '/static/pages/landing.js';
 
@@ -26,6 +26,56 @@ let terminalInput = null;
 let terminalInputArea = null;
 let currentParams = {};
 let currentTerminalAPI = null;
+let terminalQueue = [];
+let terminalLoading = false;
+
+export function getTerminalAPI() {
+    return currentTerminalAPI;
+}
+
+/**
+ * Public entry point for sending messages to the terminal.
+ * Handles automatic loading of the terminal view and message queuing.
+ */
+export async function handleTerminalMessage(messageText, level = 'info', ws = null) {
+    // If terminal is already loaded, print immediately
+    if (currentTerminalAPI) {
+        currentTerminalAPI.addOutput(messageText, level);
+        return;
+    }
+
+    // Buffer the message
+    terminalQueue.push({ text: messageText, level });
+
+    // If already loading, just wait
+    if (terminalLoading) return;
+
+    // Initiate terminal load
+    terminalLoading = true;
+    try {
+        if (!ws) {
+            console.error("[Terminal] Cannot load terminal without a WebSocket.");
+            return;
+        }
+
+        currentTerminalAPI = await loadTerminalView({
+            existingWs: ws,
+            hideInput: true
+        });
+
+        // Flush the queue
+        if (currentTerminalAPI) {
+            while (terminalQueue.length > 0) {
+                const queued = terminalQueue.shift();
+                currentTerminalAPI.addOutput(queued.text, queued.level);
+            }
+        }
+    } catch (error) {
+        console.error("[Terminal] Failed to auto-load terminal:", error);
+    } finally {
+        terminalLoading = false;
+    }
+}
 
 /**
  * Loads and displays the terminal view.
@@ -73,8 +123,12 @@ export async function loadTerminalView(params = {}) {
 export async function returnFromTerminal(params) {
     console.log("Returning from terminal view. Loading console view with params:", params);
     
-    // Pop the back handler we replaced when entering terminal view
-    popBackHandler();
+    // If the terminal handler is still on the stack, pop it.
+    // This handles the case where returnFromTerminal is called manually (e.g. from site title).
+    // If called via back button, back.js already popped it.
+    if (getStack().length > 0) {
+        try { popBackHandler(); } catch (_) {}
+    }
 
     if (currentTerminalAPI) {
         currentTerminalAPI.cleanup();
@@ -249,45 +303,4 @@ export function cleanupTerminal() {
     terminalInputArea = null;
 }
 
-// This function will be attached to the WebSocket by the calling module (e.g., deploy.js)
-export async function handleTerminalMessage(event, { printLine, enableInput, disableInput }) {
-    const data = JSON.parse(event.data);
-    const { event: eventType, payload } = data;
-
-    switch (eventType) {
-        case 'UPDATE_STATUS':
-            if (payload.text) {
-                printLine(payload.text, payload.level || 'info');
-            }
-            break;
-        case 'PROMPT_USER':
-            // The main session listener in deployment.js will handle this.
-            // This function is for display only.
-            break;
-        case 'DEPLOYMENT_COMPLETE':
-            if (payload.finalMessage) {
-                printLine(payload.finalMessage, 'success');
-            }
-            if (payload.prompt) {
-                setTimeout(async () => {
-                    const result = await prompt(payload.prompt);
-                    if (result.status === 'answered' && result.value === 'view_resource') {
-                        const siteId = payload.prompt.context.site_id;
-                        const { returnFromTerminal } = await import('/static/pages/terminal.js');
-                        returnFromTerminal({ specialNav: 'viewSite', siteId });
-                    }
-                }, 100);
-            }
-            printLine("Press any key to continue.", 'system');
-            enableInput();
-            break;
-        case 'FATAL_ERROR':
-            printLine(`ERROR: ${payload.message}`, 'error');
-            printLine("Session terminated. Press any key to continue.", 'system');
-            enableInput();
-            break;
-        default:
-            // Generic event logging if needed
-            break;
-    }
-}
+// End of terminal.js logic

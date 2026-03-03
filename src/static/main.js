@@ -1,5 +1,26 @@
 // website/src/static/main.js
 
+// --- Global Logging Control ---
+const LOG_LEVELS = { debug: 0, info: 1, warn: 2, error: 3 };
+const FRONTEND_LOG_LEVEL = 'debug'; // Set to 'debug', 'info', 'warn', or 'error'
+
+const currentLevel = LOG_LEVELS[FRONTEND_LOG_LEVEL] ?? LOG_LEVELS.info;
+
+// Store original console methods
+const originalConsole = {
+    log: console.log,
+    info: console.info,
+    warn: console.warn,
+    debug: console.debug,
+    error: console.error
+};
+
+// Override console methods based on log level
+if (currentLevel > LOG_LEVELS.debug) console.debug = () => {};
+if (currentLevel > LOG_LEVELS.info) console.log = console.info = () => {};
+if (currentLevel > LOG_LEVELS.warn) console.warn = () => {};
+// console.error is always preserved
+
 import { registerHandler } from './scripts/registry.js';
 // Import the main menu initialization function from the common module
 import { initializeMenu, renderMenu, cleanupCurrentMenu } from '/static/pages/menu.js';

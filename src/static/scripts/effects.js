@@ -24,8 +24,18 @@ export function applyRainbowEffect(el) {
         const char = text[i];
         const span = document.createElement('span');
         span.textContent = char;
-        // Add a staggered delay, cycling every 2 seconds to match the animation
-        span.style.animationDelay = `${(i * 0.1) % 2}s`;
+        
+        // Use a negative delay so the animation starts immediately but "jumps" 
+        // to the correct point in the cycle. This keeps them staggered 
+        // without the staggered start times.
+        const staggerDelay = (i * 0.1) % 2;
+        span.style.animationDelay = `-${staggerDelay}s`;
+        
+        // Pre-calculate the initial color based on the stagger delay
+        // This ensures they have the right color even before the first animation frame
+        const hue = (staggerDelay / 2) * 360;
+        span.style.color = `hsl(${hue}, 100%, 50%)`;
+
         el.appendChild(span);
     }
     // Fade the text in now that it's styled

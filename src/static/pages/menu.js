@@ -658,6 +658,7 @@ export function initializeMenu(containerElement, userState) {
                             // The Promise Ballet: Create a promise that rejects when 'Back' is clicked
                             const cancelPromise = new Promise((resolve, reject) => {
                                 cancelAction = () => {
+                                    console.log(`[Menu] cancelAction (Loading Handler) fired for action: ${action}`);
                                     console.log('Back clicked during loading, rejecting action.');
                                     reject(new Error('UserCancelled'));
                                 };
@@ -672,20 +673,31 @@ export function initializeMenu(containerElement, userState) {
                             clearStatusDisplay();
                             
                             // Race the action against the cancellation
-                            await Promise.race([
+                            const actionResult = await Promise.race([
                                 actionHandlers[action](params),
                                 cancelPromise
                             ]);
+
+                            // The Ballet: If the action returned a menu target, we store it 
+                            // to render AFTER the loading handler is popped in the finally block.
+                            if (actionResult && (typeof actionResult === 'string' || typeof actionResult === 'object')) {
+                                params.nextMenuTarget = actionResult;
+                            }
                         } else {
                             // Non-loading action
                             clearStatusDisplay();
-                            await actionHandlers[action](params);
+                            const actionResult = await actionHandlers[action](params);
+                            if (actionResult && (typeof actionResult === 'string' || typeof actionResult === 'object')) {
+                                renderMenu(actionResult);
+                            }
                         }
                     } catch (error) {
-                        if (error.message === 'UserCancelled') {
+                        const isCancellation = error.message === 'UserCancelled';
+                        if (isCancellation) {
                             const previousMenuId = menuContainerElement.dataset.previousMenu;
                             if (previousMenuId) {
-                                await renderMenu(previousMenuId);
+                                // The Ballet: Store the target to render AFTER the finally block pops the handler
+                                params.nextMenuTarget = previousMenuId;
                             }
                         } else if (error.id === 'project_not_initialized') {
                             updateStatusDisplay("You must initiate at least one deployment before accessing this menu.", 'info');
@@ -693,21 +705,37 @@ export function initializeMenu(containerElement, userState) {
                             console.error(`Error executing action "${action}":`, error);
                             const previousMenuId = menuContainerElement.dataset.previousMenu;
                             if (previousMenuId) {
-                                renderMenu(previousMenuId);
+                                // The Ballet: Store the target to render AFTER the finally block pops the handler
+                                params.nextMenuTarget = previousMenuId;
                             }
                             if (error.message !== 'ReauthInitiated') {
-                                updateStatusDisplay(`Error: ${error.message || 'Action failed.'}`, 'error');
+                                // Error message removed per user request
                             }
                         }
                     } finally {
+                        console.log(`[Menu] Action '${action}' finally block. loadingHandlerPushed: ${loadingHandlerPushed}`);
                         // The Ballet: If the action finished without the user hitting 'Back', 
                         // our handler is still on the stack. We must pop it.
                         if (loadingHandlerPushed) {
                             const { getStack, popBackHandler } = await import('/static/scripts/back.js');
                             const stack = getStack();
+                            
                             if (stack[stack.length - 1] === cancelAction) {
+                                console.log(`[Menu] Popping loading handler for '${action}' (it was still on top)`);
                                 popBackHandler();
+                            } else {
+                                // If the top isn't ours, it means a sub-action (like a prompt or sub-menu)
+                                // pushed something and didn't pop it, or we re-rendered too early.
+                                console.warn(`[Menu] NOT popping loading handler for '${action}'. Stack top is different!`);
+                                console.log(`[Menu] Current stack top:`, stack[stack.length - 1]);
                             }
+                        }
+
+                        // The Ballet: If the action returned a menu target, render it NOW 
+                        // that the loading handler has been popped and the stack is clean.
+                        if (params.nextMenuTarget) {
+                            console.log(`[Menu] Rendering nextMenuTarget: ${params.nextMenuTarget}`);
+                            renderMenu(params.nextMenuTarget);
                         }
                     }
                 } else {
