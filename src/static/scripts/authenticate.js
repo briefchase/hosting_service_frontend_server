@@ -396,17 +396,20 @@ export async function initiateReauthUI(params = {}) {
  * @returns {Function} An async function that takes a `params` object and executes the guarded action.
  */
 export function requireAuth(actionFn, actionName) {
-    // DRY helper for triggering a re-authentication flow.
-    const _initiateReauth = async (guardedFn, params) => {
-        // Store the original action for re-execution after successful auth.
-        // This *always* overwrites any previously pending action.
+    // The Ballet: Centralized helper for triggering re-authentication.
+    // Creates a promise that pauses execution until the user signs in via the popup.
+    const _withReauth = async (params) => {
+        const authPromise = new Promise(resolve => {
+            pendingAuthResolve = resolve;
+        });
+
+        // Store the original action for legacy fallback re-execution
         if (typeof window !== 'undefined') {
-            console.log("Setting pending re-authentication action:", { actionFn: guardedFn, params });
-            window.pendingReauthAction = { actionFn: guardedFn, params };
+            window.pendingReauthAction = { actionFn, params };
         }
 
-        // Ensure we pass the correct context to the UI trigger
         await initiateReauthUI(params);
+        return await authPromise;
     };
 
     const guarded = async function(params) {
@@ -420,34 +423,22 @@ export function requireAuth(actionFn, actionName) {
 
         const user = getUser();
 
+        // Case A: No user in session
         if (!user) {
-            console.log("[Auth Guard] No user found in sessionStorage, initiating reauth.");
-            
-            // The Ballet: Create a promise that resolves when authentication is successful
-            const authPromise = new Promise(resolve => {
-                pendingAuthResolve = resolve;
-            });
-
-            await _initiateReauth(guarded, params);
-            
-            // Wait for the user to sign in
-            await authPromise;
-            
-            // Now that we're authenticated, proceed with the action
+            console.log("[Auth Guard] No user found, initiating reauth.");
+            await _withReauth(params);
+            // After reauth, proceed to the action
             return await actionFn(params);
         }
 
-        console.log("[Auth Guard] User found, proceeding with action.");
-
+        // Case B: User exists, try the action (which might fail with 401)
         try {
             return await actionFn(params);
         } catch (error) {
             if (error && error.message === 'ReauthInitiated') {
-                const authPromise = new Promise(resolve => {
-                    pendingAuthResolve = resolve;
-                });
-                await _initiateReauth(guarded, params);
-                await authPromise;
+                console.log("[Auth Guard] Session expired (401), initiating reauth.");
+                await _withReauth(params);
+                // After reauth, retry the action
                 return await actionFn(params);
             }
             throw error;

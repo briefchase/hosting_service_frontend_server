@@ -167,7 +167,10 @@ async function _listSitesLogic(params) {
 
 export const listSites = requireAuthAndSubscription(_listSitesLogic, 'view sites'); 
 
-export async function viewSite(siteId) {
+export async function viewSite(params) {
+    const { machineId, deploymentName } = params;
+    const siteId = `${machineId}-${deploymentName}`;
+
     // Check if the site details are already cached from a recent fetch.
     if (menus[`site-details-menu-${siteId}`]) {
         // If cached, render it directly for a fast transition.
@@ -211,8 +214,8 @@ export const destroyDeployment = requireAuthAndSubscription(async (params) => {
     const confirmation = await prompt({
         id: 'confirm-destroy-prompt',
         text: `Are you sure you want to destroy the deployment '${deployment}'? This cannot be undone.`,
-        type: 'options',
-        options: [{ label: 'yes', value: 'yes' }, { label: 'no', value: 'no' }]
+        type: 'form',
+        buttons: [{ label: 'yes', value: 'yes' }, { label: 'no', value: 'no' }]
     });
 
     if (confirmation.status !== 'answered' || confirmation.value !== 'yes') {

@@ -1,6 +1,6 @@
 import { fetchWithAuth, API_BASE_URL } from '/static/main.js';
 import { getUser, clearPendingReauthAction } from '/static/scripts/authenticate.js';
-import { checkDomainAvailability as apiCheckDomainAvailability } from '/static/scripts/domains.js';
+import { checkDomainAvailability as apiCheckDomainAvailability } from '/static/scripts/api.js';
 import { openPopup } from '/static/scripts/popup.js';
 import { pushBackHandler, popBackHandler } from '/static/scripts/back.js';
 
@@ -372,162 +372,6 @@ function _createDomainInput(container, promptConfig, resolve) {
     setTimeout(() => inputElement.focus(), 0);
 }
 
-function _handleTextPrompt(promptContentWrapper, promptConfig, resolve) {
-    const { id, defaultValue, inputStatus, context, validationRegex, validationError, validateOnSubmit, showContinueButton } = promptConfig;
-
-    if (id === 'domain_name_input') {
-        _createDomainInput(promptContentWrapper, promptConfig, resolve);
-        return;
-    }
-
-    const inputContainer = document.createElement('div');
-    if (showContinueButton) {
-        inputContainer.className = 'prompt-input-container';
-    }
-
-    const inputElement = document.createElement('input');
-    inputElement.type = 'text';
-    inputElement.className = 'prompt-input-text';
-    inputElement.id = `prompt-input-${id}`;
-    if (defaultValue) inputElement.value = defaultValue;
-    if (inputStatus) inputElement.classList.add(`prompt-input-${inputStatus}`);
-    inputContainer.appendChild(inputElement);
-    
-    const errorElement = document.createElement('div');
-    errorElement.className = 'prompt-validation-error';
-    errorElement.style.display = 'none';
-    errorElement.style.color = '#e53935';
-    errorElement.style.fontSize = '0.9em';
-    errorElement.style.marginTop = '4px';
-
-    const validateInput = () => {
-        if (validationRegex && inputElement.value) {
-            const regex = new RegExp(validationRegex);
-            if (!regex.test(inputElement.value)) {
-                errorElement.textContent = validationError || 'Invalid input.';
-                errorElement.style.display = 'block';
-                inputElement.classList.add('prompt-input-unavailable');
-                return false;
-            }
-        }
-        errorElement.style.display = 'none';
-        inputElement.classList.remove('prompt-input-unavailable');
-        return true;
-    };
-
-    if (showContinueButton) {
-        const rightSideContainer = document.createElement('div');
-        rightSideContainer.className = 'prompt-input-right';
-        inputContainer.appendChild(rightSideContainer);
-
-        const buttonWrapper = document.createElement('div');
-        buttonWrapper.id = 'prompt-button-wrapper';
-        rightSideContainer.appendChild(buttonWrapper);
-
-        inputContainer.classList.add('prompt-input-container--stacked');
-        rightSideContainer.classList.add('prompt-input-right--stacked');
-
-        const continueBtn = document.createElement('button');
-        continueBtn.textContent = 'continue';
-        continueBtn.className = 'prompt-button';
-
-        if (id === 'common_deployment_name') {
-            // Special sanitization logic for deployment names
-            continueBtn.onclick = () => {
-                const raw = String(inputElement.value || '');
-                const sanitized = raw
-                    .toLowerCase()
-                    .replace(/[\s_]+/g, '-')
-                    .replace(/[^a-z0-9-]/g, '')
-                    .replace(/-+/g, '-')
-                    .replace(/^-+|-+$/g, '')
-                    .slice(0, 63);
-
-                if (!sanitized) {
-                    const promptTextEl = document.querySelector('.prompt-wrapper .prompt-text');
-                    if (promptTextEl && !promptTextEl.dataset.prefixedInvalid) {
-                        promptTextEl.textContent = `The previous entry was invalid. ${promptTextEl.textContent}`;
-                        promptTextEl.dataset.prefixedInvalid = 'true';
-                    }
-                    inputElement.focus();
-                    return;
-                }
-
-                if (resolve) {
-                    resolve({ status: 'answered', value: raw });
-                }
-            };
-        } else {
-            // Generic validation logic for other prompts
-            if (validationRegex && !validateOnSubmit) {
-                inputElement.addEventListener('input', validateInput);
-            }
-            continueBtn.onclick = () => {
-                if (validateInput()) {
-                    if (resolve) {
-                        resolve({ status: 'answered', value: inputElement.value });
-                    }
-                }
-            };
-        }
-        
-        buttonWrapper.appendChild(continueBtn);
-
-        inputElement.addEventListener('keydown', (event) => {
-            if (event.key === 'Enter') {
-                event.preventDefault();
-                continueBtn.click();
-            }
-        });
-    } else {
-        if (validationRegex && !validateOnSubmit) {
-            inputElement.addEventListener('input', validateInput);
-        }
-        inputElement.addEventListener('keydown', (event) => {
-            if (event.key === 'Enter' && resolve) {
-                if (!validationRegex || validateInput()) {
-                    resolve({ status: 'answered', value: inputElement.value });
-                }
-            }
-        });
-    }
-
-    promptContentWrapper.appendChild(inputContainer);
-    promptContentWrapper.appendChild(errorElement);
-    setTimeout(() => inputElement.focus(), 0);
-}
-
-
-function _handleOptionsPrompt(promptContentWrapper, promptConfig, resolve) {
-    const { options } = promptConfig;
-    if (!options || options.length === 0) return;
-
-    const optionsContainer = document.createElement('div');
-    optionsContainer.className = 'prompt-options-container';
-    options.forEach(option => {
-        const optionButton = document.createElement('button');
-        const text = typeof option === 'object' ? option.label : option;
-        const value = typeof option === 'object' ? option.value : option;
-        const url = typeof option === 'object' ? option.url : null;
-
-        const decoded = _decodeHtmlEntities(String(text ?? ''));
-        const sanitized = _sanitizeAllowedInlineHtml(decoded);
-        optionButton.innerHTML = sanitized;
-        optionButton.className = 'prompt-option-button';
-        
-        optionButton.onclick = () => {
-            if (url) {
-                openPopup(url);
-                // Do not resolve, let the user click another button
-            } else {
-                resolve({ status: 'answered', value: value });
-            }
-        };
-        optionsContainer.appendChild(optionButton);
-    });
-    promptContentWrapper.appendChild(optionsContainer);
-}
-
 function _handleEmbeddedCheckoutPrompt(promptContentWrapper, promptConfig, resolve) {
             const container = document.createElement('div');
             container.id = 'embedded-checkout-container';
@@ -637,83 +481,178 @@ function _handleDomainPrompt(promptContentWrapper, promptConfig, resolve) {
     _createDomainInput(promptContentWrapper, promptConfig, resolve);
 }
 
-function _handleSelectPrompt(promptContentWrapper, promptConfig, resolve) {
-            const selectContainer = document.createElement('div');
-            selectContainer.className = 'prompt-select-container';
-            
-            promptConfig.items.forEach(item => {
-                const p = document.createElement('p');
-                p.textContent = item.text;
-                p.className = 'prompt-select-option';
-                p.onclick = () => {
-                    if (resolve) {
-                        resolve({ status: 'answered', value: item.id });
+function _handleFormPrompt(promptContentWrapper, promptConfig, resolve) {
+    const form = document.createElement('form');
+    form.className = 'prompt-form';
+
+    const validationRules = [];
+
+    // Helper to render a single item/block
+    const renderItem = (item, container) => {
+        if (item.type === 'row') {
+            const row = document.createElement('div');
+            row.className = 'prompt-form-row';
+            (item.items || []).forEach(subItem => renderItem(subItem, row));
+            container.appendChild(row);
+            return;
+        }
+
+        const itemContainer = document.createElement('div');
+        itemContainer.className = 'prompt-form-item';
+
+        if (item.label) {
+            const label = document.createElement('label');
+            label.textContent = item.label;
+            label.htmlFor = `prompt-input-${item.id}`;
+            itemContainer.appendChild(label);
+        }
+
+        if (item.type === 'select') {
+            const select = document.createElement('select');
+            select.id = `prompt-input-${item.id}`;
+            select.name = item.id;
+            if (item.width) {
+                itemContainer.style.flex = '0 0 auto';
+                itemContainer.style.width = item.width;
+            }
+            (item.options || []).forEach(opt => {
+                const option = document.createElement('option');
+                option.value = typeof opt === 'object' ? opt.value : opt;
+                option.textContent = typeof opt === 'object' ? opt.label : opt;
+                select.appendChild(option);
+            });
+            itemContainer.appendChild(select);
+        } else if (item.type === 'text' || !item.type) {
+            const input = document.createElement('input');
+            input.type = 'text';
+            input.id = `prompt-input-${item.id}`;
+            input.name = item.id;
+            input.className = 'prompt-input-text';
+            if (item.placeholder) input.placeholder = item.placeholder;
+            if (item.value) input.value = item.value;
+            if (item.width) {
+                itemContainer.style.flex = '0 0 auto';
+                itemContainer.style.width = item.width;
+            }
+            itemContainer.appendChild(input);
+
+            // Validation logic
+            if (item.validationRegex) {
+                const errorElement = document.createElement('div');
+                errorElement.className = 'prompt-validation-error';
+                errorElement.style.display = 'none';
+                errorElement.style.color = '#e53935';
+                errorElement.style.fontSize = '0.8em';
+                errorElement.style.marginTop = '4px';
+                errorElement.textContent = item.validationError || 'Invalid input.';
+                itemContainer.appendChild(errorElement);
+
+                const validate = () => {
+                    const regex = new RegExp(item.validationRegex);
+                    const isValid = regex.test(input.value);
+                    if (isValid || !input.value) {
+                        errorElement.style.display = 'none';
+                        input.classList.remove('prompt-input-unavailable');
+                        return true;
+                    } else {
+                        errorElement.style.display = 'block';
+                        input.classList.add('prompt-input-unavailable');
+                        return false;
                     }
                 };
-                selectContainer.appendChild(p);
-            });
-            promptContentWrapper.appendChild(selectContainer);
-}
 
-function _handleFormPrompt(promptContentWrapper, promptConfig, resolve) {
-            const form = document.createElement('form');
-            form.className = 'prompt-form';
-            promptConfig.items.forEach(item => {
-                const itemContainer = document.createElement('div');
-                itemContainer.className = 'prompt-form-item';
+                input.addEventListener('input', validate);
+                validationRules.push({ input, validate });
+            }
+        } else if (item.type === 'header') {
+            const header = document.createElement('p');
+            header.className = 'prompt-text';
+            header.innerHTML = item.text;
+            itemContainer.appendChild(header);
+        } else if (item.type === 'record') {
+            const record = document.createElement('div');
+            record.className = 'record'; // Use shared record styling
+            record.innerHTML = item.text;
 
-                const label = document.createElement('label');
-                label.textContent = item.label;
-                label.htmlFor = `prompt-input-${item.id}`;
-                itemContainer.appendChild(label);
+            if (item.value !== undefined) {
+                record.classList.add('actionable');
+                record.onclick = () => {
+                    resolve({ status: 'answered', value: item.value });
+                };
+            }
 
-                if (item.type === 'select') {
-                    const select = document.createElement('select');
-                    select.id = `prompt-input-${item.id}`;
-                    select.name = item.id;
-                    item.options.forEach(opt => {
-                        const option = document.createElement('option');
-                        option.value = opt.value;
-                        option.textContent = opt.label;
-                        select.appendChild(option);
-                    });
-                    itemContainer.appendChild(select);
-                }
-                form.appendChild(itemContainer);
-            });
+            itemContainer.appendChild(record);
+        }
 
-            const buttonContainer = document.createElement('div');
-            buttonContainer.className = 'prompt-options-container';
-            (promptConfig.buttons || []).forEach(buttonConfig => {
-                const button = document.createElement('button');
-                button.textContent = buttonConfig.label;
-                button.className = 'prompt-option-button';
-                if (buttonConfig.isSubmit) {
-                    button.type = 'submit';
-                } else {
-                    button.type = 'button';
-                    button.onclick = () => resolve({ status: 'answered', value: buttonConfig.value });
-                }
-                buttonContainer.appendChild(button);
-            });
-            form.appendChild(buttonContainer);
+        container.appendChild(itemContainer);
+    };
 
-            form.onsubmit = (e) => {
-                e.preventDefault();
-                const formData = new FormData(form);
-                const values = Object.fromEntries(formData.entries());
-                resolve({ status: 'answered', value: values });
-            };
+    // Render all top-level items
+    (promptConfig.items || []).forEach(item => renderItem(item, form));
 
-            promptContentWrapper.appendChild(form);
+    // Render buttons/actions
+    const buttonContainer = document.createElement('div');
+    buttonContainer.className = 'prompt-options-container';
+    
+    const renderButton = (buttonConfig, container) => {
+        if (buttonConfig.type === 'row') {
+            const row = document.createElement('div');
+            row.className = 'prompt-form-row';
+            (buttonConfig.items || []).forEach(subItem => renderButton(subItem, row));
+            container.appendChild(row);
+            return;
+        }
+
+        const button = document.createElement('button');
+        button.textContent = buttonConfig.label;
+        button.className = 'prompt-option-button';
+        if (buttonConfig.isSubmit) {
+            button.type = 'submit';
+        } else {
+            button.type = 'button';
+            button.onclick = () => resolve({ status: 'answered', value: buttonConfig.value });
+        }
+        container.appendChild(button);
+    };
+
+    (promptConfig.buttons || []).forEach(buttonConfig => renderButton(buttonConfig, buttonContainer));
+    form.appendChild(buttonContainer);
+
+    form.onsubmit = (e) => {
+        e.preventDefault();
+
+        // Run all validations
+        let allValid = true;
+        let firstInvalid = null;
+        validationRules.forEach(rule => {
+            if (!rule.validate()) {
+                allValid = false;
+                if (!firstInvalid) firstInvalid = rule.input;
+            }
+        });
+
+        if (!allValid) {
+            if (firstInvalid) firstInvalid.focus();
+            return;
+        }
+
+        const formData = new FormData(form);
+        const values = Object.fromEntries(formData.entries());
+        resolve({ status: 'answered', value: values });
+    };
+
+    promptContentWrapper.appendChild(form);
+
+    // Auto-focus the first input if it exists
+    setTimeout(() => {
+        const firstInput = form.querySelector('input, select');
+        if (firstInput) firstInput.focus();
+    }, 0);
 }
 
 const promptHandlers = {
-    'text': _handleTextPrompt,
-    'options': _handleOptionsPrompt,
     'embedded_checkout': _handleEmbeddedCheckoutPrompt,
     'domain': _handleDomainPrompt,
-    'select': _handleSelectPrompt,
     'form': _handleFormPrompt,
 };
 

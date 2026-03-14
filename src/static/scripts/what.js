@@ -38,8 +38,8 @@ export async function showWhatPrompt() {
     const promptPromise = prompt({
         id: 'what-is-this-prompt',
         text: promptText,
-        type: 'options',
-        options: [{ label: 'OK', value: 'ok' }]
+        type: 'form',
+        buttons: [{ label: 'ok', value: 'ok' }]
     });
 
     // Wait a tick for the prompt to render to the DOM

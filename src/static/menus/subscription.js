@@ -1,9 +1,9 @@
-import { menus, renderMenu } from '/static/pages/menu.js';
+import { menus, renderMenu, updateStatusDisplay, startLoading } from '/static/pages/menu.js';
 import { registerHandler } from '../scripts/registry.js';
 import { API_BASE_URL, fetchWithAuth } from '/static/main.js';
-import { updateStatusDisplay } from '/static/pages/menu.js';
 import { pushBackHandler } from '/static/scripts/back.js';
 import { prompt } from '/static/pages/prompt.js';
+import { requireAuth } from '/static/scripts/authenticate.js';
 
 // Subscription polling state
 let subscriptionPollingInterval = null;
@@ -33,46 +33,17 @@ export async function initializeStripe() {
 }
 
 // Handle subscription checkout
-// This function now uses the generic loading UI via showLoading: true
 export async function handleSubscribe(actionFn, params) {
     if (typeof actionFn === 'object' && !params) {
         params = actionFn;
         actionFn = params.actionFn;
     }
 
-    const { renderMenu, menuContainer, promoCode } = params || {};
+    const { promoCode } = params || {};
     
-    const backHandler = () => {
-        console.log("[Subscription] Back button pressed, cancelling checkout.");
-        window.__reauthInProgress = false; // Ensure re-auth state is cleared
-        window.pendingReauthAction = null; // Clear any pending action
-        
-        // The Ballet: Pop ourselves before triggering navigation
-        // We don't need to call popBackHandler manually here because 
-        // the reject(UserCancelled) will trigger the finally block in menu.js
-        // which calls popBackHandler().
+    const workFn = async () => {
+        updateStatusDisplay('loading...', 'info');
 
-        // Signal cancellation to the caller (e.g. menu.js click handler)
-        if (params && params.reject) {
-            params.reject(new Error('UserCancelled'));
-        } else {
-            // Fallback
-            import('/static/scripts/back.js').then(m => {
-                try { m.popBackHandler(); } catch (_) {}
-                if (renderMenu && menuContainer && menuContainer.dataset.previousMenu) {
-                    renderMenu(menuContainer.dataset.previousMenu);
-                } else if (renderMenu) {
-                    renderMenu('dashboard-menu');
-                }
-            });
-        }
-    };
-
-    updateStatusDisplay('loading...', 'info');
-
-    try {
-        pushBackHandler(backHandler);
-        
         const body = { embedded: true };
         if (promoCode) body.promo_code = promoCode;
 
@@ -90,13 +61,11 @@ export async function handleSubscribe(actionFn, params) {
         const session = await response.json();
 
         if (session && (session.resumed || session.already_active)) {
-            await fetchSubscriptionStatus();
+            await fetchSubscriptionStatus(params);
             updateStatusDisplay('', 'info');
             
-            // The Ballet: The finally block will handle popping our handler
-
             if (actionFn) return await actionFn({ ...params, session });
-            return session; // Return session info if no actionFn
+            return 'subscription-menu';
         }
 
         // Prefer embedded checkout; if client_secret missing, the prompt will request it
@@ -104,7 +73,7 @@ export async function handleSubscribe(actionFn, params) {
 
         const result = await prompt({
             id: 'embedded_checkout_prompt',
-            text: 'Complete your subscription below:',
+            text: 'complete your subscription',
             type: 'embedded_checkout',
             required: true,
             client_secret: clientSecret
@@ -112,14 +81,12 @@ export async function handleSubscribe(actionFn, params) {
 
         // After user returns from embedded checkout, refresh status
         try {
-            await fetchSubscriptionStatus();
+            await fetchSubscriptionStatus(params);
         } catch (e) {
             if (e.message === 'ReauthInitiated') throw e;
             console.warn("[Subscription] Failed to refresh status after checkout:", e);
         }
         updateStatusDisplay('', 'info');
-        
-        // The Ballet: The finally block will handle popping our handler
         
         // If we were in a guard flow, resume the original action
         if (result.status === 'answered' && result.value === 'completed') {
@@ -127,47 +94,36 @@ export async function handleSubscribe(actionFn, params) {
                 console.log("[Subscription] Checkout complete, resuming original action.");
                 return await actionFn(params);
             }
-            return { status: 'completed' };
+            return 'subscription-menu';
         }
         
-        return { status: 'cancelled' };
+        return 'subscription-menu';
+    };
+
+    try {
+        return await startLoading(workFn);
     } catch (error) {
-        if (error.message === 'ReauthInitiated') {
-            // Re-throw so requireAuth can handle it if it was wrapped
-            throw error;
-        }
+        if (error.message === 'UserCancelled') throw error;
         console.error("Failed to start embedded checkout:", error);
         updateStatusDisplay(`Failed to start subscription process: ${error.message}`, "error");
-        
-        // The Ballet: Ensure we pop the handler even on error if it was pushed
-        // The finally block will handle this
-    } finally {
-        // The Ballet: Always pop our own handler before finishing
-        const { getStack, popBackHandler } = await import('/static/scripts/back.js');
-        const stack = getStack();
-        if (stack[stack.length - 1] === backHandler) {
-            popBackHandler();
-        }
+        return 'subscription-menu';
     }
 }
 
-// This function now uses the generic loading UI via showLoading: true
-export async function handleCancelSubscription() {
+// This function now uses the generic loading UI via showLoading: false
+export async function handleCancelSubscription(params) {
     const confirmation = await prompt({
         id: 'confirm-cancel-subscription-prompt',
         text: "Are you sure you want to cancel your membership? Scheduled backups will not be created, and your deployed machines will remain active. You may however, enable your membership again anytime in the future.",
-        type: 'options',
-        options: [{ label: 'yes', value: true }, { label: 'no', value: false }]
+        type: 'form',
+        buttons: [{ label: 'yes', value: true }, { label: 'no', value: false }]
     });
 
     if (confirmation.status !== 'answered' || confirmation.value !== true) {
-        updateStatusDisplay('Cancellation aborted.', 'info');
-        // The generic loading UI handler in menu.js will automatically
-        // revert to the previous menu, so no extra action is needed here.
         return; 
     }
 
-    try {
+    const workFn = async () => {
         updateStatusDisplay('canceling...', 'info');
         const response = await fetchWithAuth(`${API_BASE_URL}/cancel-subscription`, {
             method: 'POST',
@@ -177,16 +133,23 @@ export async function handleCancelSubscription() {
         const data = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(data.error || 'Failed to cancel');
         // Immediately refresh status and let the status line show the end date
-        await fetchSubscriptionStatus();
+        await fetchSubscriptionStatus(params);
         updateStatusDisplay('', 'info'); // clear transient message
+        return 'subscription-menu';
+    };
+
+    try {
+        return await startLoading(workFn);
     } catch (e) {
+        if (e.message === 'UserCancelled') throw error;
         console.error('Cancel subscription error:', e);
         updateStatusDisplay(`Unable to cancel subscription: ${e.message}`,'error');
+        return 'subscription-menu';
     }
 }
 
 // Fetch subscription status
-async function fetchSubscriptionStatus() {
+async function _fetchSubscriptionStatusLogic(params) {
     try {
         const response = await fetchWithAuth(`${API_BASE_URL}/subscription-status`);
         if (!response.ok) {
@@ -198,7 +161,7 @@ async function fetchSubscriptionStatus() {
         const statusItem = menus['subscription-menu'].items.find(item => item.id === 'sub-status');
         let actionItem = menus['subscription-menu'].items.find(item => item.id === 'subscription-action');
         if (!actionItem) {
-            actionItem = { id: 'subscription-action', type: 'button', text: '', action: null, showLoading: true };
+            actionItem = { id: 'subscription-action', type: 'button', text: '', action: null, showLoading: false };
             menus['subscription-menu'].items.push(actionItem);
         }
         
@@ -223,27 +186,14 @@ async function fetchSubscriptionStatus() {
             }
         }
 
-        // Update DOM if element exists; otherwise render once to create it
-        const statusElement = document.getElementById('sub-status');
-        const actionElement = document.getElementById('subscription-action');
-        if (statusElement && statusItem) {
-            statusElement.textContent = statusItem.text;
-        }
-        if (actionElement) {
-            if (actionItem && actionItem.text) {
-                actionElement.textContent = actionItem.text;
-                if (actionItem.action) {
-                    actionElement.setAttribute('data-action', actionItem.action);
-                } else {
-                    actionElement.removeAttribute('data-action');
-                }
-            }
-        } else {
-            if (isOnSubscriptionPage) {
-                renderMenu('subscription-menu');
-            }
+        // Update DOM: Always perform a full re-render to ensure styles and classes are preserved
+        if (isOnSubscriptionPage) {
+            renderMenu('subscription-menu');
         }
     } catch (error) {
+        if (error.message === 'ReauthInitiated') {
+            throw error;
+        }
         console.error('Error fetching subscription status:', error);
         
         // Update both config and DOM for error state
@@ -258,6 +208,8 @@ async function fetchSubscriptionStatus() {
         }
     }
 }
+
+export const fetchSubscriptionStatus = requireAuth(_fetchSubscriptionStatusLogic, 'view subscription');
 
 // Start polling subscription status every 20 seconds
 function startSubscriptionPolling() {
@@ -295,14 +247,23 @@ const subscriptionMenuConfig = {
         // This item will be updated dynamically
         { id: 'sub-status', text: 'Status: Checking...', type: 'record', className: 'details-last-record' }
     ],
-    backTarget: 'dashboard-menu',
-    onRender: async () => {
+    backTarget: 'account-menu',
+    onRender: async (params) => {
         // Only start polling if not already started to avoid multiple intervals
         if (!subscriptionPollingInterval) {
             startSubscriptionPolling();
             
             // Fetch status immediately on first render
-            await fetchSubscriptionStatus();
+            try {
+                await fetchSubscriptionStatus(params);
+            } catch (error) {
+                if (error.message === 'UserCancelled') {
+                    console.log("[Subscription] User cancelled re-auth, navigating back.");
+                    renderMenu(subscriptionMenuConfig.backTarget);
+                } else {
+                    throw error;
+                }
+            }
         }
     },
     onLeave: () => {

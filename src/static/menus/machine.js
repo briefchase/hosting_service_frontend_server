@@ -40,7 +40,10 @@ function generateMachineDetailsMenu(vm) {
             deploymentItems.push({
                 id: `details-deployment-${vm.id}-${index}`,
                 text: d.deployment_name,
-                type: 'record'
+                type: 'record',
+                action: 'viewSite',
+                machineId: vm.id,
+                deploymentName: d.deployment_name
             });
         });
     } else {
@@ -141,8 +144,8 @@ export const destroyMachine = requireAuthAndSubscription(async (params) => {
     const confirmation = await prompt({
         id: 'confirm-destroy-vm-prompt',
         text: `Are you sure you want to destroy the entire machine '${machineName}' and ALL its deployments? This cannot be undone.`,
-        type: 'options',
-        options: [{ label: 'yes', value: 'yes' }, { label: 'no', value: 'no' }]
+        type: 'form',
+        buttons: [{ label: 'yes', value: 'yes' }, { label: 'no', value: 'no' }]
     });
 
     if (confirmation.status !== 'answered' || confirmation.value !== 'yes') {
@@ -182,18 +185,27 @@ export const renameMachine = requireAuthAndSubscription(async (params) => {
     const newNamePrompt = await prompt({
         id: 'rename-vm-prompt',
         text: `Enter new name for machine '${machineName}':`,
-        type: 'text',
-        defaultValue: machineName,
-        showContinueButton: true,
-        validationRegex: '^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$',
-        validationError: 'Name must be 1-63 characters, start/end with a letter/number, and can only contain lowercase letters, numbers, or hyphens.'
+        type: 'form',
+        items: [
+            {
+                id: 'newName',
+                type: 'text',
+                value: machineName,
+                placeholder: 'new-name',
+                validationRegex: '^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$',
+                validationError: 'Name must be 1-63 characters, start/end with a letter/number, and can only contain lowercase letters, numbers, or hyphens.'
+            }
+        ],
+        buttons: [
+            { label: 'continue', isSubmit: true }
+        ]
     });
 
-    if (newNamePrompt.status !== 'answered' || !newNamePrompt.value || newNamePrompt.value === machineName) {
+    if (newNamePrompt.status !== 'answered' || !newNamePrompt.value || newNamePrompt.value.newName === machineName) {
         return updateStatusDisplay('Rename cancelled or name unchanged.', 'info');
     }
 
-    const newName = newNamePrompt.value;
+    const newName = newNamePrompt.value.newName;
 
     updateStatusDisplay('Renaming machine...');
 

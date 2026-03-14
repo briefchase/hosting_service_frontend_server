@@ -134,16 +134,26 @@ function generateListItemsHTML(items) {
         }
         
         // The class determines the visual style
-        const isClickable = allDataAttrs.length > 0;
-        const classList = [item.type === 'button' ? 'menu-button' : 'menu-record'];
-        if (isClickable && classList[0] === 'menu-record') {
-            classList.push('menu-actionable'); // For hover/cursor styling
+        const isActionable = !!(item.targetMenu || item.action);
+        const classList = [item.type === 'button' ? 'menu-button' : 'record-container'];
+        if (isActionable && classList[0] === 'record-container') {
+            classList.push('actionable'); // For hover/cursor styling
         }
         if (item.className) {
             classList.push(item.className);
         }
 
         const text = (item.text === undefined || item.text === null || item.text === '') ? '&nbsp;' : item.text;
+        
+        if (classList.includes('record-container')) {
+            const recordClass = isActionable ? 'record actionable' : 'record';
+            
+            // If it has a custom className (like label-record), ensure it's on the inner div
+            const finalRecordClass = item.className ? `${recordClass} ${item.className}` : recordClass;
+            
+            return `<li${itemId} class="${classList.join(' ')}"${allDataAttrs}><div class="${finalRecordClass}">${text}</div></li>`;
+        }
+        
         return `<li${itemId} class="${classList.join(' ')}"${allDataAttrs}>${text}</li>`;
     }).join('');
 }
@@ -169,6 +179,60 @@ function generateMenuHTML(menuConfig, menuId) {
 
 // Function to render a specific menu
 // Exporting renderMenu in case action handlers need it directly
+/**
+ * Initiates the loading state for the menu and races the provided work against a back-button cancellation.
+ * Clears items, hides titles, sets data-loading, and manages the back-stack handler.
+ * @param {Function} workFn - A function that returns the async work promise.
+ * @returns {Promise} - The result of the work, or rejects with 'UserCancelled'.
+ */
+export async function startLoading(workFn) {
+    if (menuContainerElement) {
+        const listContainer = menuContainerElement.querySelector('#menu-list-container');
+        if (listContainer) {
+            listContainer.innerHTML = ''; // Just clear the menu buttons
+        }
+        menuContainerElement.dataset.loading = "true";
+        menuContainerElement.dataset.previousMenu = currentMenuId;
+    }
+    // Hide both titles
+    if (dynamicMenuTitleElement) {
+        dynamicMenuTitleElement.style.display = 'none';
+    }
+    updateSiteTitleVisibility(false);
+    updateAccountButtonVisibility(false);
+
+    // If no work function is provided, just setup the UI and return (legacy/manual mode)
+    if (!workFn) return;
+
+    const { pushBackHandler, popBackHandler, getStack } = await import('/static/scripts/back.js');
+    
+    let cancelAction;
+    const cancelPromise = new Promise((_, reject) => {
+        cancelAction = () => {
+            console.log('[Menu] Loading cancelled via back button');
+            reject(new Error('UserCancelled'));
+        };
+        pushBackHandler(cancelAction);
+    });
+
+    try {
+        // Start the work ONLY after the UI and back-handler are ready
+        const work = workFn();
+        return await Promise.race([work, cancelPromise]);
+    } finally {
+        // The Ballet: Ensure we only pop our own handler
+        const stack = getStack();
+        if (stack[stack.length - 1] === cancelAction) {
+            popBackHandler();
+        } else {
+            // If the top isn't ours, it means a sub-action (like a prompt or sub-menu)
+            // pushed something and didn't pop it, or we re-rendered too early.
+            console.warn(`[Menu] NOT popping loading handler. Stack top is different!`);
+            console.log(`[Menu] Current stack top:`, stack[stack.length - 1]);
+        }
+    }
+}
+
 export async function renderMenu(menuIdOrConfig) {
     // Pure Final Boss: No more clearBackHandlers() anchor.
     // We trust the ballet: every push is matched by a pop.
@@ -626,71 +690,31 @@ export function initializeMenu(containerElement, userState) {
                 // Call the appropriate handler from the central registry
                 const actionHandlers = getHandlers();
                 if (actionHandlers[action]) {
-                    const { pushBackHandler, popBackHandler } = await import('/static/scripts/back.js');
-                    let loadingHandlerPushed = false;
-                    let cancelAction = null;
+                    let postActionCallback = null;
 
                     try {
+                        let actionResult;
+
                         // --- Generic Loading UI ---
                         if (li.dataset.showLoading === 'true') {
-                            // ... UI cleanup and state setting ...
-                            if (menuContainerElement) {
-                                const listContainer = menuContainerElement.querySelector('#menu-list-container');
-                                if (listContainer) {
-                                    listContainer.innerHTML = ''; // Just clear the menu buttons
-                                }
-                            }
-                            // Hide both titles
-                            if (dynamicMenuTitleElement) {
-                                dynamicMenuTitleElement.style.display = 'none';
-                            }
-                            updateSiteTitleVisibility(false);
-                            updateAccountButtonVisibility(false);
-
-                            // Set loading state and store the menu to return to
-                            if (menuContainerElement) {
-                                menuContainerElement.dataset.loading = "true";
-                                menuContainerElement.dataset.previousMenu = currentMenuId;
-                            }
+                            // Pass a function that returns the promise, so startLoading controls execution timing
+                            const workFn = () => actionHandlers[action](params);
                             
-                            const previousMenuId = currentMenuId;
-                            
-                            // The Promise Ballet: Create a promise that rejects when 'Back' is clicked
-                            const cancelPromise = new Promise((resolve, reject) => {
-                                cancelAction = () => {
-                                    console.log(`[Menu] cancelAction (Loading Handler) fired for action: ${action}`);
-                                    console.log('Back clicked during loading, rejecting action.');
-                                    reject(new Error('UserCancelled'));
-                                };
-                                pushBackHandler(cancelAction);
-                                loadingHandlerPushed = true;
-                                
-                                // Pass the reject function to the action so guards can trigger it
-                                params.reject = reject;
-                            });
-
-                            // Clear status message
-                            clearStatusDisplay();
-                            
-                            // Race the action against the cancellation
-                            const actionResult = await Promise.race([
-                                actionHandlers[action](params),
-                                cancelPromise
-                            ]);
-
-                            // The Ballet: If the action returned a menu target, we store it 
-                            // to render AFTER the loading handler is popped in the finally block.
-                            if (actionResult && (typeof actionResult === 'string' || typeof actionResult === 'object')) {
-                                params.nextMenuTarget = actionResult;
-                            }
+                            // startLoading handles UI, back-handler, and racing
+                            actionResult = await startLoading(workFn);
                         } else {
                             // Non-loading action
                             clearStatusDisplay();
-                            const actionResult = await actionHandlers[action](params);
-                            if (actionResult && (typeof actionResult === 'string' || typeof actionResult === 'object')) {
-                                renderMenu(actionResult);
-                            }
+                            actionResult = await actionHandlers[action](params);
                         }
+
+                        // The Pure Ballet Handoff: Handle the result once, regardless of how it was fetched
+                        if (typeof actionResult === 'function') {
+                            postActionCallback = actionResult;
+                        } else if (actionResult && (typeof actionResult === 'string' || typeof actionResult === 'object')) {
+                            params.nextMenuTarget = actionResult;
+                        }
+
                     } catch (error) {
                         const isCancellation = error.message === 'UserCancelled';
                         if (isCancellation) {
@@ -708,27 +732,13 @@ export function initializeMenu(containerElement, userState) {
                                 // The Ballet: Store the target to render AFTER the finally block pops the handler
                                 params.nextMenuTarget = previousMenuId;
                             }
-                            if (error.message !== 'ReauthInitiated') {
-                                // Error message removed per user request
-                            }
                         }
                     } finally {
-                        console.log(`[Menu] Action '${action}' finally block. loadingHandlerPushed: ${loadingHandlerPushed}`);
-                        // The Ballet: If the action finished without the user hitting 'Back', 
-                        // our handler is still on the stack. We must pop it.
-                        if (loadingHandlerPushed) {
-                            const { getStack, popBackHandler } = await import('/static/scripts/back.js');
-                            const stack = getStack();
-                            
-                            if (stack[stack.length - 1] === cancelAction) {
-                                console.log(`[Menu] Popping loading handler for '${action}' (it was still on top)`);
-                                popBackHandler();
-                            } else {
-                                // If the top isn't ours, it means a sub-action (like a prompt or sub-menu)
-                                // pushed something and didn't pop it, or we re-rendered too early.
-                                console.warn(`[Menu] NOT popping loading handler for '${action}'. Stack top is different!`);
-                                console.log(`[Menu] Current stack top:`, stack[stack.length - 1]);
-                            }
+                        // The Pure Ballet Handoff: If the action returned a callback, 
+                        // execute it NOW that the loading handler is gone and the stage is clean.
+                        if (postActionCallback) {
+                            console.log(`[Menu] Executing post-action callback for '${action}'`);
+                            postActionCallback();
                         }
 
                         // The Ballet: If the action returned a menu target, render it NOW 

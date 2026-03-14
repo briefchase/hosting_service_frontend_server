@@ -9,8 +9,8 @@ export const handleRescind = async () => {
     const confirmation = await prompt({
         id: 'confirm-rescind-prompt',
         text: "Are you sure you want to rescind our access to your google account? Scheduled backups will not be created, and you will be logged out. Signing back in will undo this action.",
-        type: 'options',
-        options: [{ label: 'yes', value: true }, { label: 'no', value: false }]
+        type: 'form',
+        buttons: [{ label: 'yes', value: true }, { label: 'no', value: false }]
     });
 
     if (confirmation.status !== 'answered' || confirmation.value !== true) {

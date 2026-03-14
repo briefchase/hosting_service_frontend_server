@@ -333,9 +333,12 @@ export async function loadConsoleView(param) {
 
     // logic for special navigation
     if (param && typeof param === 'object' && param.specialNav === 'viewSite') {
-        if (param.siteId) {
+        if (param.machineId && param.deploymentName) {
             const { viewSite } = await import('/static/menus/site.js');
-            await viewSite(param.siteId);
+            await viewSite({ 
+                machineId: param.machineId, 
+                deploymentName: param.deploymentName 
+            });
         }
         return; // Stop further processing to prevent default menu render
     }

@@ -77,7 +77,7 @@ export async function checkDomainAvailability({ domainName, token }) {
     if (!domainName) return { ok: false, status: 400, error: 'domain_required' };
 
     try {
-        const response = await fetchWithAuth(`${API_BASE_URL}/check-domain-availability`, {
+        const response = await fetchWithAuth(`${API_BASE_URL}/domains/check-availability`, {
             method: 'POST',
             body: { domain: domainName }
         });
@@ -102,9 +102,9 @@ export async function checkDomainAvailability({ domainName, token }) {
     }
 }
 
-export async function fetchDomainRecords(domainName, isManaged) {
+export async function fetchDomainRecords(domainName) {
     try {
-        const response = await fetchWithAuth(`${API_BASE_URL}/domains/${domainName}/records?isManaged=${isManaged}`);
+        const response = await fetchWithAuth(`${API_BASE_URL}/domains/${domainName}/records`);
         if (!response.ok) {
             const errorData = await response.json().catch(() => ({ 
                 message: `HTTP error ${response.status}: ${response.statusText}` 
@@ -118,15 +118,33 @@ export async function fetchDomainRecords(domainName, isManaged) {
     }
 }
 
-
-export async function relinkDomain({ domainName, deployment_name, machine_id }) {
+export async function fetchDomainDetails(domainName) {
     try {
-        const response = await fetchWithAuth(`${API_BASE_URL}/relink-domain`, {
+        const response = await fetchWithAuth(`${API_BASE_URL}/domains/${domainName}`);
+        if (!response.ok) {
+            const errorData = await response.json().catch(() => ({ 
+                message: `HTTP error ${response.status}: ${response.statusText}` 
+            }));
+            throw new Error(errorData.message || 'An unknown error occurred');
+        }
+        return await response.json();
+    } catch (error) {
+        console.error("Error in fetchDomainDetails:", error);
+        throw error;
+    }
+}
+
+
+export async function relinkDomain({ domainName, deployment_name, machine_id, isExternal, isUnlink }) {
+    try {
+        const response = await fetchWithAuth(`${API_BASE_URL}/domains/relink`, {
             method: 'POST',
             body: {
                 domainName,
                 deployment_name,
-                machine_id
+                machine_id,
+                isExternal: !!isExternal,
+                isUnlink: !!isUnlink
             }
         });
 
@@ -143,6 +161,90 @@ export async function relinkDomain({ domainName, deployment_name, machine_id }) 
         };
     } catch (error) {
         return { ok: false, status: 0, error: error.message };
+    }
+}
+
+export async function transferOutDomain({ domainName, action }) {
+    try {
+        const response = await fetchWithAuth(`${API_BASE_URL}/domains/transfer-out`, {
+            method: 'POST',
+            body: { domainName, action }
+        });
+        const body = await response.json().catch(() => ({}));
+        if (response.ok) return { ok: true, result: body };
+        return { ok: false, error: body.error || 'Failed to transfer out' };
+    } catch (error) {
+        return { ok: false, error: error.message };
+    }
+}
+
+export async function toggleDomainRenewal({ domainName, enable }) {
+    try {
+        const response = await fetchWithAuth(`${API_BASE_URL}/domains/toggle-renewal`, {
+            method: 'POST',
+            body: { domainName, enable }
+        });
+        const body = await response.json().catch(() => ({}));
+        if (response.ok) return { ok: true, result: body };
+        return { ok: false, error: body.error || 'Failed to toggle renewal' };
+    } catch (error) {
+        return { ok: false, error: error.message };
+    }
+}
+
+export async function transferInDomain({ domainName, authCode }) {
+    try {
+        const response = await fetchWithAuth(`${API_BASE_URL}/domains/transfer-in`, {
+            method: 'POST',
+            body: { domainName, authCode }
+        });
+        const body = await response.json().catch(() => ({}));
+        if (response.ok) return { ok: true, result: body };
+        return { ok: false, error: body.error || 'Failed to transfer in' };
+    } catch (error) {
+        return { ok: false, error: error.message };
+    }
+}
+
+export async function addDomainRecord({ domainName, type, name, content, ttl }) {
+    try {
+        const response = await fetchWithAuth(`${API_BASE_URL}/domains/add-record`, {
+            method: 'POST',
+            body: { domainName, type, name, content, ttl }
+        });
+        const body = await response.json().catch(() => ({}));
+        if (response.ok) return { ok: true, result: body };
+        return { ok: false, error: body.error || 'Failed to add record' };
+    } catch (error) {
+        return { ok: false, error: error.message };
+    }
+}
+
+export async function updateDomainRecord({ domainName, recordId, type, name, content, ttl }) {
+    try {
+        const response = await fetchWithAuth(`${API_BASE_URL}/domains/update-record`, {
+            method: 'POST',
+            body: { domainName, recordId, type, name, content, ttl }
+        });
+        const body = await response.json().catch(() => ({}));
+        if (response.ok) return { ok: true, result: body };
+        return { ok: false, error: body.error || 'Failed to update record' };
+    } catch (error) {
+        return { ok: false, error: error.message };
+    }
+}
+
+export async function deleteDomainRecord({ domainName, recordId }) {
+    try {
+        const response = await fetchWithAuth(`${API_BASE_URL}/domains/delete-record`, {
+            method: 'POST',
+            body: { domainName, recordId }
+        });
+        const body = await response.json().catch(() => ({}));
+        if (response.ok) return { ok: true, result: body };
+        return { ok: false, error: body.error || 'Failed to delete record' };
+    } catch (error) {
+        return { ok: false, error: error.message };
     }
 }
 

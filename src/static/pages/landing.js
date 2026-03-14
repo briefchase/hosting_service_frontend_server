@@ -382,7 +382,7 @@ const _initiateStripeCheckout = async (params) => {
     try {
         const result = await prompt({
             id: 'embedded_checkout_prompt',
-            text: 'Complete your purchase',
+            text: 'complete your purchase',
             type: 'embedded_checkout',
             client_secret: data.client_secret
         });
@@ -392,8 +392,8 @@ const _initiateStripeCheckout = async (params) => {
             await prompt({
                 id: 'order-success-prompt',
                 text: 'Your order was successful!',
-                type: 'options',
-                options: [{ label: 'OK', value: 'ok' }]
+                type: 'form',
+                buttons: [{ label: 'ok', value: 'ok' }]
             });
         }
     } finally {
@@ -421,19 +421,18 @@ const _checkoutProcess = async () => {
                 {
                     type: 'select',
                     id: 'size',
-                    label: 'Size',
+                    label: 'size',
                     options: [
-                        { label: 'S', value: 'S' },
-                        { label: 'M', value: 'M' },
-                        { label: 'L', value: 'L' },
-                        { label: 'XL', value: 'XL' },
+                        { label: 's', value: 'S' },
+                        { label: 'm', value: 'M' },
+                        { label: 'l', value: 'L' },
+                        { label: 'xl', value: 'XL' },
                     ]
                 }
             ],
             buttons: [
-                { label: 'Checkout', isSubmit: true, value: 'checkout' },
-            ],
-            cancelable: true
+                { label: 'checkout', isSubmit: true, value: 'checkout' },
+            ]
         });
 
         if (result.status !== 'answered' || !result.value) {

@@ -26,9 +26,9 @@ let activeRestore = {
  * A centralized function to cancel the active restore, clean up UI,
  * and return the user to the backup menu.
  * @param {string} reason - The reason for the cancellation.
- * @param {string} [statusMessage] - An optional message to display after cancellation.
+ * @param {object} [navParams] - Optional navigation parameters.
  */
-function _cancelActiveRestore(reason, statusMessage) {
+function _cancelActiveRestore(reason, navParams = {}) {
     console.log(`[RESTORE CANCELLATION] Reason: ${reason}. Deployment ID: ${activeRestore.deploymentId}`);
     window.dispatchEvent(new CustomEvent('deploymentstatechange', { detail: { isActive: false } }));
     document.body.classList.remove('deployment-loading');
@@ -38,9 +38,7 @@ function _cancelActiveRestore(reason, statusMessage) {
     const { ws, deploymentId } = activeRestore;
 
     if (ws) {
-        // Clear the onmessage handler BEFORE closing
         ws.onmessage = null;
-
         if (ws.readyState < WebSocket.CLOSING) {
             try {
                 if (ws.readyState === WebSocket.OPEN) {
@@ -57,21 +55,14 @@ function _cancelActiveRestore(reason, statusMessage) {
         }
     }
 
-    // On success, go to resources menu. On failure/cancel, go back to backup menu.
-    const targetMenu = (reason === 'restore_complete') ? 'resources-menu' : 'backup-menu';
-    const messageType = (reason === 'restore_complete') ? 'success' : 'info';
-
     const params = { 
-        menuId: targetMenu
+        ...navParams
     };
-    
-    // Only include message if it's a successful completion
-    if (reason === 'restore_complete') {
-        params.output = statusMessage || 'Restore process ended.';
-        params.type = messageType;
+
+    if (!params.menuId) {
+        params.menuId = (reason === 'restore_complete' || reason === 'view_resource') ? 'resources-menu' : 'backup-menu';
     }
     
-    // If the terminal is active, we need to exit it cleanly first
     if (document.body.classList.contains('terminal-view-active')) {
         returnFromTerminal(params);
     } else {
@@ -405,8 +396,8 @@ const _confirmRestore = async (params) => {
     const confirmation = await prompt({
         id: 'confirm-restore-prompt',
         text: `Restore backup ${backupFilename} to ${machine.name}?`,
-        type: 'options',
-        options: [
+        type: 'form',
+        buttons: [
             { label: 'yes', value: 'yes' },
             { label: 'no', value: 'no' }
         ]
@@ -421,10 +412,10 @@ const _confirmRestore = async (params) => {
         // Phase 1: Prepare (Guarded, organically ends Loading Mode on resolution)
         const prepResult = await guardedPrepareRestore(params);
         
-        // Phase 2: Execute (Custom UI takes over)
-        // The Ballet: We do NOT await this call. By resolving _confirmRestore now,
-        // we allow the generic loading mode in menu.js to finish naturally.
-        _executeRestore(params, prepResult);
+        // Phase 2: The Handoff
+        // The Ballet: We return a function. menu.js will see this, finish its cleanup 
+        // (popping the loading handler), and THEN call this function to start the restore.
+        return () => _executeRestore(params, prepResult);
     } catch (error) {
         if (error.message === 'UserCancelled') return;
         console.error(`Restore failed:`, error);
@@ -443,8 +434,8 @@ async function _communicateRestore(ws, params) {
     const restoreBackButtonHandler = async () => {
         const result = await prompt({
             text: "Are you sure you want to exit this restore?",
-            type: 'options',
-            options: [
+            type: 'form',
+            buttons: [
                 { label: 'yes', value: true },
                 { label: 'no', value: false }
             ],
@@ -537,11 +528,16 @@ async function _communicateRestore(ws, params) {
     }
 
     function handleRestoreCompleteEvent(payload) {
-        const promptConfig = payload.prompt || {
+        const machineId = payload.machine_id;
+        const deploymentName = payload.deployment_name;
+        const promptConfig = {
             id: 'restore-complete-prompt',
-            type: 'options',
+            type: 'form',
             text: payload.finalMessage || "Restore finished.",
-            options: ['OK']
+            buttons: [
+                { label: 'ok', value: 'ok' },
+                { label: 'view resource', value: 'view_resource' }
+            ]
         };
 
         prompt(promptConfig).then(result => {
@@ -549,17 +545,13 @@ async function _communicateRestore(ws, params) {
                 ws.close();
             }
 
-            if (result && result.status === 'answered' && result.value === 'view_resource' && result.context && result.context.site_id) {
-                const siteId = result.context.site_id;
-                console.log(`Transitioning to view site: ${siteId}`);
-                
-                activeRestore.ws = null;
-                activeRestore.deploymentId = null;
-                document.body.classList.remove('deployment-loading');
-
-                window.dispatchEvent(new CustomEvent('deploymentstatechange', { detail: { isActive: false } }));
-                loadConsoleView({ specialNav: 'viewSite', siteId: siteId });
-
+            if (result && result.status === 'answered' && result.value === 'view_resource' && machineId && deploymentName) {
+                console.log(`Transitioning to view site: ${deploymentName} on ${machineId}`);
+                _cancelActiveRestore('view_resource', { 
+                    specialNav: 'viewSite', 
+                    machineId: machineId,
+                    deploymentName: deploymentName
+                });
             } else {
                 // User clicked OK. Leave them in the terminal.
                 
@@ -661,15 +653,15 @@ const _promptBackupSchedule = async (params) => {
                 type: 'select',
                 id: 'interval',
                 options: [
-                    { label: 'Manual', value: 'manual' },
-                    { label: 'Daily', value: 'daily' },
-                    { label: 'Weekly', value: 'weekly' },
-                    { label: 'Monthly', value: 'monthly' },
+                    { label: 'manual', value: 'manual' },
+                    { label: 'daily', value: 'daily' },
+                    { label: 'weekly', value: 'weekly' },
+                    { label: 'monthly', value: 'monthly' },
                 ]
             }
         ],
         buttons: [
-            { label: 'Save', isSubmit: true },
+            { label: 'save', isSubmit: true },
         ],
         cancelable: true
     });

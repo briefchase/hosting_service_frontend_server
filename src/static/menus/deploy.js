@@ -8,7 +8,7 @@ import {
     updateSiteTitleVisibility,
     fetchWithAuth
 } from '/static/main.js';
-import { loadTerminalView } from '/static/pages/terminal.js';
+import { loadTerminalView, returnFromTerminal } from '/static/pages/terminal.js';
 import { getUser, initializeGoogleSignIn, triggerGoogleSignIn } from '/static/scripts/authenticate.js';
 import { prompt, clearPromptStack } from '/static/pages/prompt.js';
 import { establishWebSocketConnection } from '/static/scripts/socket.js';
@@ -31,9 +31,9 @@ let activeDeployment = {
  * A centralized function to cancel the active deployment, clean up UI,
  * and return the user to the deploy menu.
  * @param {string} reason - The reason for the cancellation.
- * @param {string} [statusMessage] - An optional message to display after cancellation.
+ * @param {object} [navParams] - Optional navigation parameters.
  */
-function cancelActiveDeployment(reason, statusMessage) {
+function _cancelActiveDeployment(reason, navParams = {}) {
     console.log(`[DEPLOY CANCELLATION] Reason: ${reason}. Deployment ID: ${activeDeployment.deploymentId}`);
     window.dispatchEvent(new CustomEvent('deploymentstatechange', { detail: { isActive: false } }));
     document.body.classList.remove('deployment-loading');
@@ -41,10 +41,7 @@ function cancelActiveDeployment(reason, statusMessage) {
     const { ws, deploymentId } = activeDeployment;
 
     if (ws) {
-        // Clear the onmessage handler BEFORE closing to prevent processing 
-        // any final "close" events or late messages during teardown.
         ws.onmessage = null;
-        
         if (ws.readyState < WebSocket.CLOSING) {
             try {
                 if (ws.readyState === WebSocket.OPEN) {
@@ -62,10 +59,10 @@ function cancelActiveDeployment(reason, statusMessage) {
     }
 
     const params = { 
-        menuId: 'deploy-menu'
+        menuId: 'deploy-menu',
+        ...navParams
     };
     
-    // If the terminal is active, we need to exit it cleanly first
     if (document.body.classList.contains('terminal-view-active')) {
         returnFromTerminal(params);
     } else {
@@ -166,8 +163,8 @@ async function _executeDeployment(prepParams, prepResult) {
         
         const result = await prompt({
             text: "Are you sure you want to exit this deployment?",
-            type: 'options',
-            options: [
+            type: 'form',
+            buttons: [
                 { label: 'yes', value: true },
                 { label: 'no', value: false }
             ],
@@ -178,7 +175,7 @@ async function _executeDeployment(prepParams, prepResult) {
         if (result && result.status === 'answered' && result.value === true) {
             console.log("[Deployment] User confirmed exit, cancelling deployment.");
             clearPromptStack();
-            cancelActiveDeployment("user_cancelled_via_prompt", "Deployment cancelled by user.");
+            _cancelActiveDeployment("user_cancelled_via_prompt", "Deployment cancelled by user.");
         } else {
             // The Ballet: If the user says 'no', we must re-push the handler 
             // because executeBackHandler popped it before calling us.
@@ -220,7 +217,7 @@ async function _executeDeployment(prepParams, prepResult) {
             null, 
             (event) => {
                 updateStatusDisplay(`Connection error.`, 'error');
-                cancelActiveDeployment('websocket_error');
+                _cancelActiveDeployment('websocket_error');
             },
             (event) => {},
             updateStatusDisplay 
@@ -238,7 +235,7 @@ async function _executeDeployment(prepParams, prepResult) {
         if (error.message !== 'UserCancelled') {
             console.error(`Deployment execution exception for ${deploymentType}:`, error);
         }
-        cancelActiveDeployment(`execution_error: ${error.message}`);
+        _cancelActiveDeployment(`execution_error: ${error.message}`);
     }
 }
 
@@ -248,10 +245,10 @@ async function _handleDeployAction(prepParams) {
     // Phase 1: Prepare (Guarded, organically ends Loading Mode on resolution)
     const prepResult = await _prepareDeployment(prepParams);
     
-    // Phase 2: Execute (Custom UI takes over)
-    // The Ballet: We do NOT await this call. By resolving handleDeployAction now,
-    // we allow the generic loading mode in menu.js to finish naturally.
-    _executeDeployment(prepParams, prepResult);
+    // Phase 2: The Handoff
+    // The Ballet: We return a function. menu.js will see this, finish its cleanup 
+    // (popping the loading handler), and THEN call this function to start the deployment.
+    return () => _executeDeployment(prepParams, prepResult);
 }
 
 // Action handler for advanced deployment
@@ -311,7 +308,7 @@ async function communicate(ws, deploymentId) {
         } catch (error) {
             console.error('Error processing WebSocket message:', error);
             updateStatusDisplay('Error processing server message.', 'error');
-            cancelActiveDeployment(`ws_message_error: ${error.message}`);
+            _cancelActiveDeployment(`ws_message_error: ${error.message}`);
         }
     };
 
@@ -329,6 +326,7 @@ async function communicate(ws, deploymentId) {
             }); // The payload is the prompt config
             
             if (payload.type === 'domain' && answer && answer.status === 'answered' && answer.value) {
+                // The domain prompt returns { domainName, price } directly in answer.value
                 const { domainName, price } = answer.value;
                 const user = getUser();
                 if (!user || !user.token) {
@@ -352,6 +350,10 @@ async function communicate(ws, deploymentId) {
                 
                 // Set the value back to just the domainName string for the worker
                 answer.value = domainName;
+            } else if (payload.type === 'form' && answer && answer.status === 'answered' && answer.value) {
+                // If it's a form, the worker might be expecting a single value if there's only one item.
+                // However, we've updated the worker to expect the object, so we just pass answer.value as-is.
+                console.log("[Deployment] Form answer received:", answer.value);
             }
 
             // Send a structured response back to the worker
@@ -361,22 +363,27 @@ async function communicate(ws, deploymentId) {
             }));
         } catch (error) {
             console.error("Error handling prompt:", error);
-            cancelActiveDeployment(`prompt_error: ${error.message}`);
+            _cancelActiveDeployment(`prompt_error: ${error.message}`);
         }
     }
 
     function handleFatalErrorEvent(payload) {
         const messageText = payload.message || JSON.stringify(payload);
         updateStatusDisplay(messageText, 'error');
-        cancelActiveDeployment(`server_error: ${messageText}`);
+        _cancelActiveDeployment(`server_error: ${messageText}`);
     }
 
     function handleDeploymentCompleteEvent(payload) {
-        const promptConfig = payload.prompt || {
+        const machineId = payload.machine_id;
+        const deploymentName = payload.deployment_name;
+        const promptConfig = {
             id: 'deployment-complete-prompt',
-            type: 'options',
+            type: 'form',
             text: payload.finalMessage || "Deployment finished.",
-            options: ['OK']
+            buttons: [
+                { label: 'ok', value: 'ok' },
+                { label: 'view resource', value: 'view_resource' }
+            ]
         };
 
         prompt(promptConfig).then(result => {
@@ -384,19 +391,13 @@ async function communicate(ws, deploymentId) {
                 ws.close();
             }
 
-            if (result && result.status === 'answered' && result.value === 'view_resource' && result.context && result.context.site_id) {
-                const siteId = result.context.site_id;
-                console.log(`Transitioning to view site: ${siteId}`);
-                
-                // Perform a clean shutdown of the deployment state without navigating.
-                activeDeployment.ws = null;
-                activeDeployment.deploymentId = null;
-                window.dispatchEvent(new CustomEvent('deploymentstatechange', { detail: { isActive: false } }));
-                document.body.classList.remove('deployment-loading');
-
-                // Now, navigate directly to the site view.
-                loadConsoleView({ specialNav: 'viewSite', siteId: siteId });
-
+            if (result && result.status === 'answered' && result.value === 'view_resource' && machineId && deploymentName) {
+                console.log(`Transitioning to view site: ${deploymentName} on ${machineId}`);
+                _cancelActiveDeployment('view_resource', { 
+                    specialNav: 'viewSite', 
+                    machineId: machineId,
+                    deploymentName: deploymentName
+                });
             } else {
                 // User clicked OK. Leave them in the terminal.
                 

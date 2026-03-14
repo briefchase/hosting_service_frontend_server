@@ -36,8 +36,8 @@ export function showClaimMembershipButton(cookieData) {
                     await prompt({
                         id: 'already-subscribed-prompt',
                         text: 'You are already subscribed.',
-                        type: 'options',
-                        options: [{ label: 'ok', value: 'ok' }]
+                        type: 'form',
+                        buttons: [{ label: 'ok', value: 'ok' }]
                     });
                     // Stay on landing page if already active
                 } else if (result && result.error) {
@@ -45,8 +45,8 @@ export function showClaimMembershipButton(cookieData) {
                     await prompt({
                         id: 'checkout-error-prompt',
                         text: result.error,
-                        type: 'options',
-                        options: [{ label: 'ok', value: 'ok' }]
+                        type: 'form',
+                        buttons: [{ label: 'ok', value: 'ok' }]
                     });
                 } else if (result && (result.resumed || result.status === 'completed')) {
                     console.log("Membership claim checkout finished successfully.");
