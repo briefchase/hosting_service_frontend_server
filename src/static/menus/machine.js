@@ -2,12 +2,14 @@ import { menus, renderMenu, updateStatusDisplay } from '/static/pages/menu.js';
 import { registerHandler } from '../scripts/registry.js';
 import { requireAuthAndSubscription } from '/static/scripts/authenticate.js';
 import { fetchSites as apiFetchSites } from '/static/scripts/api.js';
+import { CONFIG } from '/static/config.js';
 import {
-    API_BASE_URL,
     fetchWithAuth,
     updateAccountButtonVisibility,
     updateSiteTitleVisibility,
 } from '/static/main.js';
+
+const API_BASE_URL = CONFIG.API_BASE_URL;
 import { prompt } from '/static/pages/prompt.js';
 
 // No more global cache.

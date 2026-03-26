@@ -12,8 +12,15 @@ check_terraform() {
         return 0
     fi
     echo "Terraform is not installed. Attempting installation."
+    local tf_repo="deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main"
+    local tf_repo_file="/etc/apt/sources.list.d/hashicorp.list"
+    
     wget -O- https://apt.releases.hashicorp.com/gpg | gpg --dearmor | sudo tee /usr/share/keyrings/hashicorp-archive-keyring.gpg > /dev/null || { echo "Error: Failed to add HashiCorp GPG key." >&2; return 1; }
-    echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/hashicorp.list > /dev/null || { echo "Error: Failed to add HashiCorp repository." >&2; return 1; }
+    
+    if [ ! -f "$tf_repo_file" ] || ! grep -qF "$tf_repo" "$tf_repo_file"; then
+        echo "$tf_repo" | sudo tee "$tf_repo_file" > /dev/null || { echo "Error: Failed to add HashiCorp repository." >&2; return 1; }
+    fi
+    
     sudo apt update && sudo apt install -y terraform || { echo "Error: Failed to install Terraform." >&2; return 1; }
     echo "Terraform was installed successfully."
 }
@@ -22,7 +29,13 @@ check_terraform() {
 check_gcp() {
     if ! command -v gcloud &>/dev/null; then
         echo "Google Cloud SDK is not installed. Attempting installation."
-        echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" | sudo tee -a /etc/apt/sources.list.d/google-cloud-sdk.list > /dev/null || { echo "Error: Adding the GCloud repository failed." >&2; return 1; }
+        local gcloud_repo="deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main"
+        local repo_file="/etc/apt/sources.list.d/google-cloud-sdk.list"
+        
+        if [ ! -f "$repo_file" ] || ! grep -qF "$gcloud_repo" "$repo_file"; then
+            echo "$gcloud_repo" | sudo tee "$repo_file" > /dev/null || { echo "Error: Adding the GCloud repository failed." >&2; return 1; }
+        fi
+        
         curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | sudo apt-key --keyring /usr/share/keyrings/cloud.google.gpg add - || { echo "Error: Adding the GCloud key failed." >&2; return 1; }
         sudo apt update && sudo apt install -y google-cloud-sdk || { echo "Error: Installing the GCloud SDK failed." >&2; return 1; }
         echo "Google Cloud SDK was installed successfully."

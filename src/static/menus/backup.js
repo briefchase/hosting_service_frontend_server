@@ -3,11 +3,12 @@ import { registerHandler } from '../scripts/registry.js';
 import { requireAuthAndSubscription } from '/static/scripts/authenticate.js';
 import { 
     fetchWithAuth, 
-    API_BASE_URL,
     loadConsoleView,
     updateAccountButtonVisibility,
     updateSiteTitleVisibility
 } from '/static/main.js';
+import { CONFIG } from '/static/config.js';
+const API_BASE_URL = CONFIG.API_BASE_URL;
 import { pushBackHandler, replaceBackHandler } from '/static/scripts/back.js';
 import { fetchSites } from '/static/scripts/api.js';
 import { prompt, clearPromptStack } from '/static/pages/prompt.js';

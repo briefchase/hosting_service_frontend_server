@@ -13,11 +13,13 @@
     <link rel="manifest" href="/static/manifest.json">
     <link rel="stylesheet" href="/static/style.css"> <!-- Optional: Add a CSS file -->
     <meta name="theme-color" content="#000"/>
-    <!-- Add icon links for Apple devices -->
-    <link rel="apple-touch-icon" href="/static/icon.png">
-    <link rel="icon" type="image/png" href="/static/icon.png"> <!-- Standard favicon -->
+    <!-- Favicons -->
+    <link rel="icon" type="image/png" href="/static/icon-grey.png"> <!-- Safe Fallback -->
+    <link rel="icon" type="image/png" href="/static/icon-grey.png" media="(prefers-color-scheme: light)">
+    <link rel="icon" type="image/png" href="/static/icon-white.png" media="(prefers-color-scheme: dark)">
+    <link rel="apple-touch-icon" href="/static/icon-grey.png">
+    
     <meta name="description" content="A simple, clean console interface for web services.">
-    <link rel="icon" href="/static/images/favicon.ico" type="image/x-icon">
     <!-- Stripe.js -->
     <script src="https://js.stripe.com/v3/"></script>
     <!-- Google Platform Library -->

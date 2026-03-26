@@ -1,10 +1,11 @@
 import {
     fetchWithAuth,
-    API_BASE_URL,
     setSiteMode,
     getSiteMode,
     dayOfYear
 } from '/static/main.js';
+import { CONFIG } from '/static/config.js';
+const API_BASE_URL = CONFIG.API_BASE_URL;
 import { pushBackHandler } from '/static/scripts/back.js';
 import {
     displayAndPositionTooltip,
@@ -22,7 +23,7 @@ import { hideTutorial, planToShowTutorial } from '/static/scripts/tutorial.js';
 let musicControlsCleanup = null;
 
 // --- Configuration ---
-const GOOGLE_CLIENT_ID = "320840986458-539gugqm3d618e30s6qcottnu8goh5p1.apps.googleusercontent.com";
+const GOOGLE_CLIENT_ID = CONFIG.GOOGLE_CLIENT_ID;
 // Scopes centralized in /static/scripts/scopes.js; this page doesn't directly use them.
 
 // --- State Variables ---

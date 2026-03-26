@@ -16,18 +16,24 @@ get_project_id() {
 
 # Default configuration values
 readonly DEFAULT_CONFIRM_APPLY="y"
-readonly DEFAULT_LOCAL_HTTP_PORT="80"
+readonly DEFAULT_LOCAL_HTTP_PORT="8000"
 readonly DEFAULT_REMOTE_HTTP_PORT="80"
 readonly DEFAULT_REMOTE_HTTPS_PORT="443"
 readonly DEFAULT_LOCAL_EXT_URL="localhost"
 
 # Global configuration variables
 CFG_SSL_EMAIL=""
-CFG_EXTERNAL_URL=""
-CFG_HTTP_PORT=""
-CFG_HTTPS_PORT=""
+CFG_PRODUCTION_EXTERNAL_URL=""
+CFG_LOCAL_EXTERNAL_URL="localhost"
+CFG_LOCAL_HTTP_PORT=""
+CFG_PRODUCTION_HTTP_PORT=""
+CFG_PRODUCTION_HTTPS_PORT=""
 CFG_CONFIRM_APPLY="n"
 CFG_DEPLOYMENT_NAME=""
+CFG_LOCAL_GOOGLE_CLIENT_ID=""
+CFG_PRODUCTION_GOOGLE_CLIENT_ID=""
+CFG_PRODUCTION_API_BASE_URL=""
+CFG_TEST_API_BASE_URL=""
 
 # Helper function to check for jq
 check_jq() {
@@ -43,11 +49,17 @@ load_config() {
     if [ -f "$JSON_CONFIG_FILE" ]; then
         if ! check_jq; then return 1; fi
         CFG_SSL_EMAIL=$(jq -r '.ssl_email // ""' "$JSON_CONFIG_FILE")
-        CFG_EXTERNAL_URL=$(jq -r '.external_url // ""' "$JSON_CONFIG_FILE")
-        CFG_HTTP_PORT=$(jq -r '.http_port // ""' "$JSON_CONFIG_FILE")
-        CFG_HTTPS_PORT=$(jq -r '.https_port // ""' "$JSON_CONFIG_FILE")
+        CFG_PRODUCTION_EXTERNAL_URL=$(jq -r '.production_external_url // ""' "$JSON_CONFIG_FILE")
+        CFG_LOCAL_EXTERNAL_URL=$(jq -r '.local_external_url // "localhost"' "$JSON_CONFIG_FILE")
+        CFG_LOCAL_HTTP_PORT=$(jq -r '.local_http_port // "8000"' "$JSON_CONFIG_FILE")
+        CFG_PRODUCTION_HTTP_PORT=$(jq -r '.production_http_port // "80"' "$JSON_CONFIG_FILE")
+        CFG_PRODUCTION_HTTPS_PORT=$(jq -r '.production_https_port // "443"' "$JSON_CONFIG_FILE")
         CFG_CONFIRM_APPLY=$(jq -r '.confirm_apply // ""' "$JSON_CONFIG_FILE")
         CFG_DEPLOYMENT_NAME=$(jq -r '.deployment_name // ""' "$JSON_CONFIG_FILE")
+        CFG_LOCAL_GOOGLE_CLIENT_ID=$(jq -r '.local_google_client_id // ""' "$JSON_CONFIG_FILE")
+        CFG_PRODUCTION_GOOGLE_CLIENT_ID=$(jq -r '.production_google_client_id // ""' "$JSON_CONFIG_FILE")
+        CFG_PRODUCTION_API_BASE_URL=$(jq -r '.production_api_base_url // "https://api.servercult.com"' "$JSON_CONFIG_FILE")
+        CFG_TEST_API_BASE_URL=$(jq -r '.test_api_base_url // "http://localhost:8080"' "$JSON_CONFIG_FILE")
     elif [ -f "$CONFIG_FILE" ]; then
         source "$CONFIG_FILE"
     fi
@@ -60,12 +72,18 @@ save_config() {
     local json_content
     json_content=$(jq -n \
         --arg email "$CFG_SSL_EMAIL" \
-        --arg url "$CFG_EXTERNAL_URL" \
-        --arg http "$CFG_HTTP_PORT" \
-        --arg https "$CFG_HTTPS_PORT" \
+        --arg prod_url "$CFG_PRODUCTION_EXTERNAL_URL" \
+        --arg local_url "$CFG_LOCAL_EXTERNAL_URL" \
+        --arg local_http "$CFG_LOCAL_HTTP_PORT" \
+        --arg prod_http "$CFG_PRODUCTION_HTTP_PORT" \
+        --arg prod_https "$CFG_PRODUCTION_HTTPS_PORT" \
         --arg apply "$CFG_CONFIRM_APPLY" \
         --arg name "$CFG_DEPLOYMENT_NAME" \
-        '{ssl_email: $email, external_url: $url, http_port: $http, https_port: $https, confirm_apply: $apply, deployment_name: $name}')
+        --arg local_cid "$CFG_LOCAL_GOOGLE_CLIENT_ID" \
+        --arg prod_cid "$CFG_PRODUCTION_GOOGLE_CLIENT_ID" \
+        --arg prod_api "$CFG_PRODUCTION_API_BASE_URL" \
+        --arg test_api "$CFG_TEST_API_BASE_URL" \
+        '{ssl_email: $email, production_external_url: $prod_url, local_external_url: $local_url, local_http_port: $local_http, production_http_port: $prod_http, production_https_port: $prod_https, confirm_apply: $apply, deployment_name: $name, local_google_client_id: $local_cid, production_google_client_id: $prod_cid, production_api_base_url: $prod_api, test_api_base_url: $test_api}')
     
     echo "$json_content" > "$JSON_CONFIG_FILE"
     echo "Configuration saved to $JSON_CONFIG_FILE"
@@ -79,9 +97,39 @@ save_config() {
 
 # Simple configuration for local Apache deployment
 configure_local_deployment() {
-    CFG_EXTERNAL_URL="$DEFAULT_LOCAL_EXT_URL"
-    CFG_HTTP_PORT="$DEFAULT_LOCAL_HTTP_PORT"
+    # Load existing config first to avoid nuking other values
+    load_config
+    
+    CFG_LOCAL_EXTERNAL_URL="${CFG_LOCAL_EXTERNAL_URL:-$DEFAULT_LOCAL_EXT_URL}"
+    
+    # Prompt for Local HTTP Port
+    if [ -n "$CFG_LOCAL_HTTP_PORT" ]; then
+        read -p "Enter Local HTTP Port [$CFG_LOCAL_HTTP_PORT]: " local_port_input
+        CFG_LOCAL_HTTP_PORT="${local_port_input:-$CFG_LOCAL_HTTP_PORT}"
+    else
+        CFG_LOCAL_HTTP_PORT="$DEFAULT_LOCAL_HTTP_PORT"
+        read -p "Enter Local HTTP Port [$CFG_LOCAL_HTTP_PORT]: " local_port_input
+        CFG_LOCAL_HTTP_PORT="${local_port_input:-$CFG_LOCAL_HTTP_PORT}"
+    fi
+    
+    # Prompt for Local Google Client ID
+    if [ -n "$CFG_LOCAL_GOOGLE_CLIENT_ID" ]; then
+        read -p "Enter Local Google Client ID [$CFG_LOCAL_GOOGLE_CLIENT_ID]: " local_cid_input
+        CFG_LOCAL_GOOGLE_CLIENT_ID="${local_cid_input:-$CFG_LOCAL_GOOGLE_CLIENT_ID}"
+    else
+        read -p "Enter Local Google Client ID: " CFG_LOCAL_GOOGLE_CLIENT_ID
+    fi
+
+    # Prompt for Local API Base URL
+    if [ -n "$CFG_TEST_API_BASE_URL" ]; then
+        read -p "Enter Test API Base URL [$CFG_TEST_API_BASE_URL]: " test_api_input
+        CFG_TEST_API_BASE_URL="${test_api_input:-$CFG_TEST_API_BASE_URL}"
+    else
+        read -p "Enter Test API Base URL: " CFG_TEST_API_BASE_URL
+    fi
+    
     echo "Local Apache deployment configured."
+    save_config
 }
 
 # Simple configuration for remote Apache deployment
@@ -111,26 +159,26 @@ configure_remote_deployment() {
     fi
     
     # Prompt for external URL/domain (use saved value as default)
-    if [ -n "$CFG_EXTERNAL_URL" ]; then
+    if [ -n "$CFG_PRODUCTION_EXTERNAL_URL" ]; then
         local use_saved_input
-        read -p "Use saved domain/URL ($CFG_EXTERNAL_URL)? (y/n) [default: y]: " use_saved_input
+        read -p "Use saved domain/URL ($CFG_PRODUCTION_EXTERNAL_URL)? (y/n) [default: y]: " use_saved_input
         local use_saved="${use_saved_input:-y}"
         
         if [[ ! "$use_saved" =~ ^[Yy]$ ]]; then
-            CFG_EXTERNAL_URL=""
+            CFG_PRODUCTION_EXTERNAL_URL=""
         fi
     fi
     
-    if [ -z "$CFG_EXTERNAL_URL" ]; then
+    if [ -z "$CFG_PRODUCTION_EXTERNAL_URL" ]; then
         local use_domain_input
         read -p "Use domain for URL? (y/n) [default: n]: " use_domain_input
         local use_domain="${use_domain_input:-n}"
 
         if [[ "$use_domain" =~ ^[Yy]$ ]]; then
-            read -p "Enter domain(s) (comma-separated): " CFG_EXTERNAL_URL
-            while [ -z "$CFG_EXTERNAL_URL" ]; do
+            read -p "Enter domain(s) (comma-separated): " CFG_PRODUCTION_EXTERNAL_URL
+            while [ -z "$CFG_PRODUCTION_EXTERNAL_URL" ]; do
                 echo "Error: Domain cannot be empty."
-                read -p "Enter domain(s) (comma-separated): " CFG_EXTERNAL_URL
+                read -p "Enter domain(s) (comma-separated): " CFG_PRODUCTION_EXTERNAL_URL
             done
         else
             # Try to get IP from Terraform
@@ -148,29 +196,60 @@ configure_remote_deployment() {
                 local use_tf_ip="${use_tf_ip_input:-y}"
                 
                 if [[ "$use_tf_ip" =~ ^[Yy]$ ]]; then
-                    CFG_EXTERNAL_URL="$tf_ip"
+                    CFG_PRODUCTION_EXTERNAL_URL="$tf_ip"
                 fi
             fi
             
-            if [ -z "$CFG_EXTERNAL_URL" ]; then
-                read -p "Enter external IP or domain(s) (comma-separated): " CFG_EXTERNAL_URL
-                while [ -z "$CFG_EXTERNAL_URL" ]; do
+            if [ -z "$CFG_PRODUCTION_EXTERNAL_URL" ]; then
+                read -p "Enter external IP or domain(s) (comma-separated): " CFG_PRODUCTION_EXTERNAL_URL
+                while [ -z "$CFG_PRODUCTION_EXTERNAL_URL" ]; do
                     echo "Error: External URL cannot be empty."
-                    read -p "Enter external IP or domain(s) (comma-separated): " CFG_EXTERNAL_URL
+                    read -p "Enter external IP or domain(s) (comma-separated): " CFG_PRODUCTION_EXTERNAL_URL
                 done
             fi
         fi
     fi
     
     # Set ports
-    CFG_HTTP_PORT="${CFG_HTTP_PORT:-$DEFAULT_REMOTE_HTTP_PORT}"
-    CFG_HTTPS_PORT="${CFG_HTTPS_PORT:-$DEFAULT_REMOTE_HTTPS_PORT}"
+    if [ -n "$CFG_PRODUCTION_HTTP_PORT" ]; then
+        read -p "Enter Production HTTP Port [$CFG_PRODUCTION_HTTP_PORT]: " prod_http_input
+        CFG_PRODUCTION_HTTP_PORT="${prod_http_input:-$CFG_PRODUCTION_HTTP_PORT}"
+    else
+        CFG_PRODUCTION_HTTP_PORT="$DEFAULT_REMOTE_HTTP_PORT"
+        read -p "Enter Production HTTP Port [$CFG_PRODUCTION_HTTP_PORT]: " prod_http_input
+        CFG_PRODUCTION_HTTP_PORT="${prod_http_input:-$CFG_PRODUCTION_HTTP_PORT}"
+    fi
+
+    if [ -n "$CFG_PRODUCTION_HTTPS_PORT" ]; then
+        read -p "Enter Production HTTPS Port [$CFG_PRODUCTION_HTTPS_PORT]: " prod_https_input
+        CFG_PRODUCTION_HTTPS_PORT="${prod_https_input:-$CFG_PRODUCTION_HTTPS_PORT}"
+    else
+        CFG_PRODUCTION_HTTPS_PORT="$DEFAULT_REMOTE_HTTPS_PORT"
+        read -p "Enter Production HTTPS Port [$CFG_PRODUCTION_HTTPS_PORT]: " prod_https_input
+        CFG_PRODUCTION_HTTPS_PORT="${prod_https_input:-$CFG_PRODUCTION_HTTPS_PORT}"
+    fi
     
     # Confirm Terraform apply
     local apply_input
     read -p "Apply Terraform plan? (y/n) [default: ${DEFAULT_CONFIRM_APPLY}]: " apply_input
     CFG_CONFIRM_APPLY="${apply_input:-$DEFAULT_CONFIRM_APPLY}"
     [[ "$CFG_CONFIRM_APPLY" =~ ^[Yy]$ ]] && CFG_CONFIRM_APPLY="y" || CFG_CONFIRM_APPLY="n"
+    
+    # Prompt for Production Google Client ID
+    if [ -n "$CFG_PRODUCTION_GOOGLE_CLIENT_ID" ]; then
+        read -p "Enter Production Google Client ID [$CFG_PRODUCTION_GOOGLE_CLIENT_ID]: " prod_cid_input
+        CFG_PRODUCTION_GOOGLE_CLIENT_ID="${prod_cid_input:-$CFG_PRODUCTION_GOOGLE_CLIENT_ID}"
+    else
+        read -p "Enter Production Google Client ID: " CFG_PRODUCTION_GOOGLE_CLIENT_ID
+    fi
+
+    # Prompt for Production API Base URL
+    if [ -n "$CFG_PRODUCTION_API_BASE_URL" ]; then
+        read -p "Enter Production API Base URL [$CFG_PRODUCTION_API_BASE_URL]: " prod_api_input
+        CFG_PRODUCTION_API_BASE_URL="${prod_api_input:-$CFG_PRODUCTION_API_BASE_URL}"
+    else
+        read -p "Enter Production API Base URL: " CFG_PRODUCTION_API_BASE_URL
+    fi
     
     # Save configuration
     save_config
@@ -202,9 +281,13 @@ configure_deployment() {
 show_configuration() {
     echo "=== Apache Deployment Configuration ==="
     echo "Deployment Name: $CFG_DEPLOYMENT_NAME"
-    echo "External URL: $CFG_EXTERNAL_URL"
-    echo "HTTP Port: $CFG_HTTP_PORT"
-    echo "HTTPS Port: $CFG_HTTPS_PORT"
+    echo "Production External URL: $CFG_PRODUCTION_EXTERNAL_URL"
+    echo "Local External URL: $CFG_LOCAL_EXTERNAL_URL"
+    echo "Production HTTP Port: $CFG_PRODUCTION_HTTP_PORT"
+    echo "Production HTTPS Port: $CFG_PRODUCTION_HTTPS_PORT"
+    echo "Local HTTP Port: $CFG_LOCAL_HTTP_PORT"
+    echo "Production API Base URL: $CFG_PRODUCTION_API_BASE_URL"
+    echo "Test API Base URL: $CFG_TEST_API_BASE_URL"
     echo "SSL Email: $CFG_SSL_EMAIL"
     echo "Confirm Apply: $CFG_CONFIRM_APPLY"
     echo "================================="

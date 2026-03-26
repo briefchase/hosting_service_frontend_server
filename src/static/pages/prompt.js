@@ -1,4 +1,7 @@
-import { fetchWithAuth, API_BASE_URL } from '/static/main.js';
+import { fetchWithAuth } from '/static/main.js';
+import { CONFIG } from '/static/config.js';
+
+const API_BASE_URL = CONFIG.API_BASE_URL;
 import { getUser, clearPendingReauthAction } from '/static/scripts/authenticate.js';
 import { checkDomainAvailability as apiCheckDomainAvailability } from '/static/scripts/api.js';
 import { openPopup } from '/static/scripts/popup.js';

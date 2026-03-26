@@ -1,10 +1,11 @@
-// Import the API base URL
-import { fetchWithAuth, API_BASE_URL } from '/static/main.js';
+import { fetchWithAuth } from '/static/main.js';
+import { CONFIG } from '/static/config.js';
 import { updateStatusDisplay, clearStatusDisplay } from '/static/pages/menu.js';
 import { GCP_SCOPES, PEOPLE_PHONE_SCOPE } from '/static/scripts/scopes.js';
 
 // --- Configuration ---
-const GOOGLE_CLIENT_ID = "320840986458-539gugqm3d618e30s6qcottnu8goh5p1.apps.googleusercontent.com";
+const GOOGLE_CLIENT_ID = CONFIG.GOOGLE_CLIENT_ID;
+const API_BASE_URL = CONFIG.API_BASE_URL;
 
 // --- Helper for status updates ---
 function updateAuthStatus(container, message, type = 'info') {
@@ -210,9 +211,9 @@ export function initializeGoogleSignIn(statusContainer) {
 
     try {
         // Initialize the Google OAuth 2.0 Code Client
-        const dynamicRedirectUri = (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
-            ? 'http://localhost:8080'
-            : window.location.origin;
+        // The redirect_uri must match exactly what was used to get the code.
+        // We use the current origin (including port) to ensure consistency.
+        const dynamicRedirectUri = window.location.origin;
         console.log('[Auth][Frontend] Using redirect_uri for Google Code flow:', dynamicRedirectUri);
         console.log('[Auth][Frontend] API endpoint for auth:', `${API_BASE_URL}/authenticate`);
 

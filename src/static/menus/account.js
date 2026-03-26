@@ -1,7 +1,9 @@
 // Import the central menu registry
 import { menus } from '/static/pages/menu.js';
 import { registerHandler } from '../scripts/registry.js';
-import { fetchWithAuth, API_BASE_URL } from '/static/main.js';
+import { fetchWithAuth } from '/static/main.js';
+import { CONFIG } from '/static/config.js';
+const API_BASE_URL = CONFIG.API_BASE_URL;
 import { prompt } from '/static/pages/prompt.js';
 
 

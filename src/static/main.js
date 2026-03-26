@@ -1,8 +1,11 @@
 // website/src/static/main.js
 
+import { registerHandler } from './scripts/registry.js';
+import { CONFIG } from '/static/config.js';
+
 // --- Global Logging Control ---
 const LOG_LEVELS = { debug: 0, info: 1, warn: 2, error: 3 };
-const FRONTEND_LOG_LEVEL = 'debug'; // Set to 'debug', 'info', 'warn', or 'error'
+const FRONTEND_LOG_LEVEL = CONFIG.LOG_LEVEL || 'info'; 
 
 const currentLevel = LOG_LEVELS[FRONTEND_LOG_LEVEL] ?? LOG_LEVELS.info;
 
@@ -21,7 +24,6 @@ if (currentLevel > LOG_LEVELS.info) console.log = console.info = () => {};
 if (currentLevel > LOG_LEVELS.warn) console.warn = () => {};
 // console.error is always preserved
 
-import { registerHandler } from './scripts/registry.js';
 // Import the main menu initialization function from the common module
 import { initializeMenu, renderMenu, cleanupCurrentMenu } from '/static/pages/menu.js';
 import { getHandlers } from '/static/scripts/registry.js';
@@ -79,8 +81,6 @@ let siteTitle = null; // Add variable for site title
 let currentPageCleanup = null;
 let currentTerminalAPI = null;
 
-export const API_BASE_URL = 'https://api.servercult.com';
-
 // --- Initialization ---
 
 /**
@@ -107,10 +107,16 @@ async function initializeApp() {
     // Initialize Stripe.js
     await initializeStripe();
 
-    // Set header site title to protocol + hostname
+    // Set header site title to protocol + hostname (and port if HTTP)
     const currentDomain = window.location.hostname;
     const currentProtocol = window.location.protocol;
-    siteTitle.textContent = `${currentProtocol}//${currentDomain}`;
+    const currentPort = window.location.port;
+    
+    let titleText = `${currentProtocol}//${currentDomain}`;
+    if (currentProtocol === 'http:' && currentPort) {
+        titleText += `:${currentPort}`;
+    }
+    siteTitle.textContent = titleText;
     console.log(`Site title set to: ${siteTitle.textContent}`);
 
     // Keep a consistent font for the title (no randomization)
@@ -684,7 +690,7 @@ const handleLogout = async () => {
 
     // Attempt to log out on the server.
     try {
-        await fetchWithAuth(`${API_BASE_URL}/logout`, { 
+        await fetchWithAuth(`${CONFIG.API_BASE_URL}/logout`, { 
             method: 'POST',
             suppressReauth: true // Add this option to prevent re-authentication on 401
         });

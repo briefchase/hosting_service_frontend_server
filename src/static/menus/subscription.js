@@ -1,6 +1,9 @@
 import { menus, renderMenu, updateStatusDisplay, startLoading } from '/static/pages/menu.js';
 import { registerHandler } from '../scripts/registry.js';
-import { API_BASE_URL, fetchWithAuth } from '/static/main.js';
+import { CONFIG } from '/static/config.js';
+import { fetchWithAuth } from '/static/main.js';
+
+const API_BASE_URL = CONFIG.API_BASE_URL;
 import { pushBackHandler } from '/static/scripts/back.js';
 import { prompt } from '/static/pages/prompt.js';
 import { requireAuth } from '/static/scripts/authenticate.js';

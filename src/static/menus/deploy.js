@@ -2,12 +2,13 @@
 import { menus } from '/static/pages/menu.js';
 import { registerHandler } from '../scripts/registry.js';
 import { 
-    API_BASE_URL, 
     loadConsoleView,
     updateAccountButtonVisibility,
     updateSiteTitleVisibility,
     fetchWithAuth
 } from '/static/main.js';
+import { CONFIG } from '/static/config.js';
+const API_BASE_URL = CONFIG.API_BASE_URL;
 import { loadTerminalView, returnFromTerminal } from '/static/pages/terminal.js';
 import { getUser, initializeGoogleSignIn, triggerGoogleSignIn } from '/static/scripts/authenticate.js';
 import { prompt, clearPromptStack } from '/static/pages/prompt.js';

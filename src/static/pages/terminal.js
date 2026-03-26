@@ -1,7 +1,8 @@
 // website/src/static/pages/terminal.js
 
-import { API_BASE_URL } from '/static/main.js';
 import { getUser } from '/static/scripts/authenticate.js';
+import { CONFIG } from '/static/config.js';
+const API_BASE_URL = CONFIG.API_BASE_URL;
 import { establishWebSocketConnection } from '/static/scripts/socket.js'; // Import the new function
 import { pushBackHandler, popBackHandler, replaceBackHandler, getStack } from '/static/scripts/back.js';
 import { prompt } from '/static/pages/prompt.js';

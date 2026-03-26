@@ -235,7 +235,7 @@ create_index_page() {
     log "Deployed static files copied successfully"
   fi
   
-  # Copy template files if they exist - maintain directory structure for templates/ but copy index.html to root
+  # Copy template files if they exist - maintain directory structure for templates/
   if [ -d "$templates_dir" ] && [ "$(ls -A $templates_dir 2>/dev/null)" ]; then
     log "Found deployed template files, copying with proper structure..."
     
@@ -247,15 +247,17 @@ create_index_page() {
       log "Error: Failed to copy template files"
     }
     
-    # Also copy index.html to root level for direct access
-    if [ -f "$templates_dir/index.html" ]; then
-      cp "$templates_dir/index.html" /var/www/html/ || {
-        log "Warning: Failed to copy index.html to root"
-      }
-    fi
-    
     has_content=true
     log "Deployed template files copied successfully"
+  fi
+
+  # Copy index.html to root level if it exists in deployment root
+  if [ -f "$deploy_dir/index.html" ]; then
+    cp "$deploy_dir/index.html" /var/www/html/ || {
+      log "Warning: Failed to copy index.html to root"
+    }
+    has_content=true
+    log "Deployed index.html copied to root successfully"
   fi
   
   # If no content was deployed, create fallback page

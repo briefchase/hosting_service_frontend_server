@@ -1,12 +1,14 @@
 // Import the central menu registry and API base URL
 import { menus, renderMenu, updateStatusDisplay, startLoading } from '/static/pages/menu.js';
 import { registerHandler } from '../scripts/registry.js';
+import { CONFIG } from '/static/config.js';
 import { 
-    API_BASE_URL, 
     fetchWithAuth, 
     updateAccountButtonVisibility,
     updateSiteTitleVisibility 
 } from '/static/main.js';
+
+const API_BASE_URL = CONFIG.API_BASE_URL;
 import { requireAuthAndSubscription, requireAuth, getUser } from '/static/scripts/authenticate.js';
 import { prompt } from '/static/pages/prompt.js';
 import { 

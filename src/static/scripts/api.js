@@ -1,4 +1,7 @@
-import { API_BASE_URL, fetchWithAuth } from '/static/main.js';
+import { fetchWithAuth } from '/static/main.js';
+import { CONFIG } from '/static/config.js';
+
+const API_BASE_URL = CONFIG.API_BASE_URL;
 
 /**
  * Fetches all sites/deployments from the API.

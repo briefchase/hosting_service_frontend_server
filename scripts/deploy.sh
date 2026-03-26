@@ -118,7 +118,14 @@ obfuscate_src() {
     minify_css "$src_dir" "$temp_obfuscated_dir"
     minify_html "$src_dir" "$temp_obfuscated_dir"
     
-    echo "Obfuscation complete. Files available in: $temp_obfuscated_dir" >&2
+    # Template the files in the obfuscated directory before packaging
+    # We pass the deployment type from the environment or assume remote
+    template_files "remote" "$temp_obfuscated_dir" "y" || {
+        echo "Error: Failed to template files in obfuscated directory" >&2
+        return 1
+    }
+    
+    echo "Obfuscation and templating complete. Files available in: $temp_obfuscated_dir" >&2
     echo "$temp_obfuscated_dir"
 }
 
@@ -166,67 +173,66 @@ stage_local() {
     
     echo "Starting local Apache server for deployment: $deployment_name"
     
-    # Check if Apache is installed locally
-    if ! command -v apache2 &> /dev/null; then
-        echo "Apache is not installed locally. Installing..."
-        sudo apt-get update && sudo apt-get install -y apache2 || {
-            echo "Error: Failed to install Apache locally" >&2
-            return 1
-        }
-    fi
+    # Use src directory directly for local development (skip obfuscation)
+    local build_dir="$src_dir"
     
-    # Create obfuscated files
-    local obfuscated_dir
-    obfuscated_dir=$(obfuscate_src) || {
-        echo "Error: Failed to obfuscate source files" >&2
-        return 1
-    }
-    
-    # Copy obfuscated files to web root
-    echo "Deploying obfuscated files to local web root..."
+    # Copy files to web root
+    echo "Deploying source files to local web root..."
     sudo rm -rf "$web_root"/* || true
     
     # Copy static files if they exist - maintain directory structure
-    if [ -d "$obfuscated_dir/static" ]; then
-        sudo cp -r "$obfuscated_dir/static" "$web_root/" 2>/dev/null || {
+    if [ -d "$build_dir/static" ]; then
+        sudo cp -r "$build_dir/static" "$web_root/" 2>/dev/null || {
             echo "Warning: No static files found to copy" >&2
         }
     fi
     
-    # Copy template files if they exist - maintain directory structure for templates/ but copy index.html to root
-    if [ -d "$obfuscated_dir/templates" ]; then
+    # Copy template files if they exist - maintain directory structure for templates/
+    if [ -d "$build_dir/templates" ]; then
         # Create templates directory to maintain URL structure
         sudo mkdir -p "$web_root/templates"
         
         # Copy all template files to maintain /templates/ path structure
-        sudo cp -r "$obfuscated_dir/templates"/* "$web_root/templates/" 2>/dev/null || {
+        sudo cp -r "$build_dir/templates"/* "$web_root/templates/" 2>/dev/null || {
             echo "Warning: No template files found to copy" >&2
         }
-        
-        # Also copy index.html to root level for direct access
-        if [ -f "$obfuscated_dir/templates/index.html" ]; then
-            sudo cp "$obfuscated_dir/templates/index.html" "$web_root/" 2>/dev/null || {
-                echo "Warning: Failed to copy index.html to root" >&2
-            }
-        fi
+    fi
+    
+    # Copy index.html to root level if it exists in src root
+    if [ -f "$build_dir/index.html" ]; then
+        sudo cp "$build_dir/index.html" "$web_root/" 2>/dev/null || {
+            echo "Warning: Failed to copy index.html to root" >&2
+        }
     fi
     
     # Set proper permissions
     sudo chown -R www-data:www-data "$web_root"
     sudo chmod -R 755 "$web_root"
     
+    # Template the files in the web root after they are copied
+    template_files "local" "$web_root" "n" || {
+        echo "Error: Failed to template files in local web root" >&2
+        return 1
+    }
+    
+    # Configure Apache to listen on the configured local port
+    local active_port="${CFG_LOCAL_HTTP_PORT:-8000}"
+    echo "Configuring Apache to listen on port $active_port..."
+    # Use a more robust regex to replace any existing Listen port
+    sudo sed -i "s/^Listen [0-9]\+/Listen $active_port/" /etc/apache2/ports.conf
+    sudo sed -i "s/<VirtualHost \*:[0-9]\+>/<VirtualHost *:$active_port>/" /etc/apache2/sites-available/000-default.conf
+    
     # Start Apache
     sudo systemctl enable apache2
-    sudo systemctl start apache2 || {
+    sudo systemctl restart apache2 || {
         echo "Error: Failed to start Apache locally" >&2
         return 1
     }
     
     echo "Local Apache server started successfully"
-    echo "Access your site at: http://localhost"
+    echo "Access your site at: http://localhost:$active_port"
     
-    # Cleanup
-    rm -rf "$obfuscated_dir"
+    # Cleanup (none needed when using src directly)
     return 0
 }
 
@@ -268,23 +274,13 @@ stage_remote() {
     
     # Copy all obfuscated files (static, templates, etc.)
     if [ -d "$obfuscated_dir" ]; then
-        # Copy static files if they exist
-        if [ -d "$obfuscated_dir/static" ]; then
-            cp -r "$obfuscated_dir/static" "$temp_deploy_dir/" || {
-                echo "Error: Failed to copy obfuscated static files" >&2
-                rm -rf "$temp_deploy_dir" "$obfuscated_dir"
-                return 1
-            }
-        fi
-        
-        # Copy templates files if they exist
-        if [ -d "$obfuscated_dir/templates" ]; then
-            cp -r "$obfuscated_dir/templates" "$temp_deploy_dir/" || {
-                echo "Error: Failed to copy obfuscated template files" >&2
-                rm -rf "$temp_deploy_dir" "$obfuscated_dir"
-                return 1
-            }
-        fi
+        # Copy everything from obfuscated_dir to temp_deploy_dir
+        # Use -a to preserve structure and handle hidden files if any
+        cp -a "$obfuscated_dir"/. "$temp_deploy_dir/" || {
+            echo "Error: Failed to copy obfuscated files" >&2
+            rm -rf "$temp_deploy_dir" "$obfuscated_dir"
+            return 1
+        }
     fi
 
     # Create .htaccess file in the temp deployment directory
@@ -311,7 +307,7 @@ EOF
   "deployment_name": "$deployment_name",
   "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
   "type": "apache_static",
-  "domain": "$CFG_EXTERNAL_URL",
+  "domain": "$CFG_PRODUCTION_EXTERNAL_URL",
   "ssl_email": "$CFG_SSL_EMAIL"
 }
 EOF
@@ -356,7 +352,15 @@ EOF
         sudo tar xzf apache_deploy.tar.gz -C /tmp/apache_deploy && \
         sudo chmod +x /tmp/apache_deploy/deploy.sh && \
         sudo /tmp/apache_deploy/deploy.sh && \
-        sudo cp /tmp/apache_deploy/.htaccess /var/www/html/
+        # Only copy actual web content, not management scripts
+        sudo cp -r /tmp/apache_deploy/static /var/www/html/ 2>/dev/null || true && \
+        sudo cp -r /tmp/apache_deploy/templates /var/www/html/ 2>/dev/null || true && \
+        sudo cp /tmp/apache_deploy/index.html /var/www/html/ 2>/dev/null || true && \
+        sudo cp /tmp/apache_deploy/.htaccess /var/www/html/ 2>/dev/null || true && \
+        # Clean up any management scripts that might have been copied to web root previously
+        sudo rm -f /var/www/html/deploy.sh /var/www/html/provision.sh /var/www/html/deploy_config.json && \
+        sudo chown -R www-data:www-data /var/www/html/ && \
+        sudo chmod -R 755 /var/www/html/
     "
     
     echo "Executing deployment on remote server..."
@@ -370,15 +374,15 @@ EOF
     rm -rf "$temp_deploy_dir" "$obfuscated_dir" "$tarball"
 
     # Show appropriate final message based on URL type
-    if [[ "$CFG_EXTERNAL_URL" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    if [[ "$CFG_PRODUCTION_EXTERNAL_URL" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
         echo "Deployment successful."
-        echo "Site available at: http://$CFG_EXTERNAL_URL"
+        echo "Site available at: http://$CFG_PRODUCTION_EXTERNAL_URL"
     else
         local primary_domain
-        primary_domain=$(echo "$CFG_EXTERNAL_URL" | cut -d, -f1)
+        primary_domain=$(echo "$CFG_PRODUCTION_EXTERNAL_URL" | cut -d, -f1)
         echo "Deployment successful."
         echo "Site available at: https://$primary_domain"
-        echo "All configured domains: $CFG_EXTERNAL_URL"
+        echo "All configured domains: $CFG_PRODUCTION_EXTERNAL_URL"
         echo "Note: SSL is enabled only for domains that passed DNS validation."
     fi
     return 0
@@ -527,13 +531,6 @@ deploy() {
     elif [ "$deployment_type" == "remote" ]; then
         check_terraform || { echo "Error: Terraform installation failed." >&2; return 1; }
     fi
-
-    # Configure deployment files (templating)
-    echo "Configuring deployment files..."
-    template_files "$deployment_type" "$deployment_name" "y" || {
-        echo "Error: File templating failed." >&2
-        return 1
-    }
 
     if [ "$deployment_type" == "local" ]; then
         # Local deployment

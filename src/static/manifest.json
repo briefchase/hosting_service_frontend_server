@@ -3,12 +3,12 @@
   "name": "Hoster Web App",
   "icons": [
     {
-      "src": "/static/icon.png",
+      "src": "/static/icon-grey.png",
       "type": "image/png",
       "sizes": "192x192"
     },
     {
-      "src": "/static/icon.png",
+      "src": "/static/icon-white.png",
       "type": "image/png",
       "sizes": "512x512"
     }

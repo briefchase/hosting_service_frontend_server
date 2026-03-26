@@ -6,12 +6,10 @@ export const menus = {};
 
 // Import the base API URL
 // import { API_BASE_URL } from '../variables.js'; // REMOVED - Now importing from main.js
-import {
-    API_BASE_URL,
-    updateSiteTitleVisibility,
-    updateAccountButtonVisibility,
-    loadLandingView
-} from '/static/main.js'; // Updated import path
+import { updateSiteTitleVisibility, updateAccountButtonVisibility, loadLandingView } from "/static/main.js";
+import { CONFIG } from "/static/config.js";
+
+const API_BASE_URL = CONFIG.API_BASE_URL;
 import { displayAndPositionTooltip, hideTooltip, updateLastMouseEvent } from '/static/scripts/tooltip.js';
 import { pushBackHandler, popBackHandler, clearBackHandlers } from '/static/scripts/back.js';
 
