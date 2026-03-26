@@ -1,6 +1,10 @@
 # Secrets and Config
 config.json
+vars_*.json
 sa-key.json
+public/
+firebase-debug.log
+.firebase/
 app/traefik/acme.json
 app/traefik/traefik.toml
 app/traefik/dynamic/force-https.toml

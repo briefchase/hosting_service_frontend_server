@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# This script contains functions related to building, pushing, and deploying the application.
+# This script contains functions related to building and deploying the application to Firebase.
 # It should be sourced by the main go.sh script.
 
 # Source necessary dependencies
@@ -92,21 +92,24 @@ minify_html() {
     done
 }
 
-# Function to obfuscate the entire src directory
+# Function to obfuscate the entire src directory into a destination directory
 obfuscate_src() {
-    local src_dir="$_DEPLOY_SCRIPT_DIR/../src"
-    local temp_obfuscated_dir="$_DEPLOY_SCRIPT_DIR/../.obfuscated"
+    local src_dir="$1"
+    local dest_dir="$2"
     
-    echo "Creating obfuscated version of src directory..." >&2
+    [ -z "$src_dir" ] && { echo "Error: Source directory is required for obfuscate_src." >&2; return 1; }
+    [ -z "$dest_dir" ] && { echo "Error: Destination directory is required for obfuscate_src." >&2; return 1; }
+
+    echo "Creating obfuscated version of $src_dir in $dest_dir..." >&2
     
-    # Clean and create temp directory
-    rm -rf "$temp_obfuscated_dir"
-    mkdir -p "$temp_obfuscated_dir"
+    # Clean and create destination directory
+    rm -rf "$dest_dir"
+    mkdir -p "$dest_dir"
     
     # Copy non-script files first
     find "$src_dir" -type f ! -name "*.js" ! -name "*.css" ! -name "*.html" | while read -r file; do
         local rel_path="${file#$src_dir/}"
-        local dest_file="$temp_obfuscated_dir/$rel_path"
+        local dest_file="$dest_dir/$rel_path"
         local dest_file_dir="$(dirname "$dest_file")"
         
         mkdir -p "$dest_file_dir"
@@ -114,482 +117,236 @@ obfuscate_src() {
     done
     
     # Obfuscate/minify specific file types
-    obfuscate_js "$src_dir" "$temp_obfuscated_dir"
-    minify_css "$src_dir" "$temp_obfuscated_dir"
-    minify_html "$src_dir" "$temp_obfuscated_dir"
+    obfuscate_js "$src_dir" "$dest_dir"
+    minify_css "$src_dir" "$dest_dir"
+    minify_html "$src_dir" "$dest_dir"
     
-    # Template the files in the obfuscated directory before packaging
-    # We pass the deployment type from the environment or assume remote
-    template_files "remote" "$temp_obfuscated_dir" "y" || {
-        echo "Error: Failed to template files in obfuscated directory" >&2
-        return 1
-    }
-    
-    echo "Obfuscation and templating complete. Files available in: $temp_obfuscated_dir" >&2
-    echo "$temp_obfuscated_dir"
+    echo "Obfuscation and minification complete. Files available in: $dest_dir" >&2
 }
 
 #======================================
-# Staging Functions
+# Deployment Functions
 #======================================
 
-# Function to clean specified remote directories
-clean_remote() {
-    local instance_name="$1"
-    local instance_zone="$2"
-
-    if [ -z "$instance_name" ] || [ -z "$instance_zone" ]; then
-        echo "Error: Instance name and zone must be provided to clean_remote." >&2
-        return 1
-    fi
-
-    local remote_commands="
-        sudo rm -rf /tmp/apache_deploy/*; \
-        sudo mkdir -p /tmp/apache_deploy; \
-        if [ \$? -eq 0 ]; then \
-            echo 'Remote deployment directory cleaned successfully.'; \
-        else \
-            echo 'Error: Failed to clean remote deployment directory.' >&2; \
-            exit 1; \
-        fi; \
-    "
-
-    gcloud compute ssh "$instance_name" --zone "$instance_zone" --command="$remote_commands"
-    local gcloud_status=$?
-
-    if [ $gcloud_status -ne 0 ]; then
-        echo "Error: Remote cleaning failed. Exit code: $gcloud_status. Check output above." >&2
-        return 1
-    fi
-
-    return 0
-}
-
-# Function to start the local Apache server (development mode)
-stage_local() {
-    local deployment_name="$1"
-    local src_dir="$_DEPLOY_SCRIPT_DIR/../src"
-    local web_root="/var/www/html"
-    
-    echo "Starting local Apache server for deployment: $deployment_name"
-    
-    # Use src directory directly for local development (skip obfuscation)
-    local build_dir="$src_dir"
-    
-    # Copy files to web root
-    echo "Deploying source files to local web root..."
-    sudo rm -rf "$web_root"/* || true
-    
-    # Copy static files if they exist - maintain directory structure
-    if [ -d "$build_dir/static" ]; then
-        sudo cp -r "$build_dir/static" "$web_root/" 2>/dev/null || {
-            echo "Warning: No static files found to copy" >&2
-        }
-    fi
-    
-    # Copy template files if they exist - maintain directory structure for templates/
-    if [ -d "$build_dir/templates" ]; then
-        # Create templates directory to maintain URL structure
-        sudo mkdir -p "$web_root/templates"
-        
-        # Copy all template files to maintain /templates/ path structure
-        sudo cp -r "$build_dir/templates"/* "$web_root/templates/" 2>/dev/null || {
-            echo "Warning: No template files found to copy" >&2
-        }
-    fi
-    
-    # Copy index.html to root level if it exists in src root
-    if [ -f "$build_dir/index.html" ]; then
-        sudo cp "$build_dir/index.html" "$web_root/" 2>/dev/null || {
-            echo "Warning: Failed to copy index.html to root" >&2
-        }
-    fi
-    
-    # Set proper permissions
-    sudo chown -R www-data:www-data "$web_root"
-    sudo chmod -R 755 "$web_root"
-    
-    # Template the files in the web root after they are copied
-    template_files "local" "$web_root" "n" || {
-        echo "Error: Failed to template files in local web root" >&2
-        return 1
-    }
-    
-    # Configure Apache to listen on the configured local port
-    local active_port="${CFG_LOCAL_HTTP_PORT:-8000}"
-    echo "Configuring Apache to listen on port $active_port..."
-    # Use a more robust regex to replace any existing Listen port
-    sudo sed -i "s/^Listen [0-9]\+/Listen $active_port/" /etc/apache2/ports.conf
-    sudo sed -i "s/<VirtualHost \*:[0-9]\+>/<VirtualHost *:$active_port>/" /etc/apache2/sites-available/000-default.conf
-    
-    # Start Apache
-    sudo systemctl enable apache2
-    sudo systemctl restart apache2 || {
-        echo "Error: Failed to start Apache locally" >&2
-        return 1
-    }
-    
-    echo "Local Apache server started successfully"
-    echo "Access your site at: http://localhost:$active_port"
-    
-    # Cleanup (none needed when using src directly)
-    return 0
-}
-
-# Function to deploy files to remote server and run start.sh
-stage_remote() {
-    local instance_name="$1"
-    local instance_zone="$2"
-    local deployment_name="$3"
-    
-    [ -z "$instance_name" ] && { echo "Error: Instance name is required for stage_remote." >&2; return 1; }
-    [ -z "$instance_zone" ] && { echo "Error: Instance zone is required for stage_remote." >&2; return 1; }
-    [ -z "$deployment_name" ] && { echo "Error: Deployment name is required for stage_remote." >&2; return 1; }
-
-    echo "Deploying to remote server: $instance_name in zone $instance_zone"
-    
-    # Clean the remote deployment directory
-    clean_remote "$instance_name" "$instance_zone" || {
-        echo "Error: Failed to clean remote directory." >&2
-        return 1
-    }
-
-    # Create obfuscated files
-    local obfuscated_dir
-    obfuscated_dir=$(obfuscate_src) || {
-        echo "Error: Failed to obfuscate source files" >&2
-        return 1
-    }
-
-    # Prepare deployment package
-    local temp_deploy_dir=$(mktemp -d)
-    local src_dir="$_DEPLOY_SCRIPT_DIR/../src"
-    
-    # Copy start.sh (the provisioning script)
-    cp "$src_dir/start.sh" "$temp_deploy_dir/provision.sh" || {
-        echo "Error: Failed to copy start.sh" >&2
-        rm -rf "$temp_deploy_dir" "$obfuscated_dir"
-        return 1
-    }
-    
-    # Copy all obfuscated files (static, templates, etc.)
-    if [ -d "$obfuscated_dir" ]; then
-        # Copy everything from obfuscated_dir to temp_deploy_dir
-        # Use -a to preserve structure and handle hidden files if any
-        cp -a "$obfuscated_dir"/. "$temp_deploy_dir/" || {
-            echo "Error: Failed to copy obfuscated files" >&2
-            rm -rf "$temp_deploy_dir" "$obfuscated_dir"
-            return 1
-        }
-    fi
-
-    # Create .htaccess file in the temp deployment directory
-    cat > "$temp_deploy_dir/.htaccess" <<'EOF'
-RewriteEngine On
-
-# Serve files if they exist
-RewriteCond %{REQUEST_FILENAME} !-f
-RewriteCond %{REQUEST_FILENAME} !-d
-
-# Specific rewrites for legal pages
-RewriteRule ^privacy/?$ /templates/privacy.html [L]
-RewriteRule ^tos/?$ /templates/tos.html [L]
-
-# Fallback to index.html for SPA-style routing, ONLY if the request is not for an existing file
-RewriteCond %{REQUEST_FILENAME} !-f
-RewriteRule ^(.*)$ /index.html [L]
-EOF
-    log "Created .htaccess file for deployment."
-    
-    # Create deployment config
-    cat > "$temp_deploy_dir/deploy_config.json" <<EOF
-{
-  "deployment_name": "$deployment_name",
-  "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
-  "type": "apache_static",
-  "domain": "$CFG_PRODUCTION_EXTERNAL_URL",
-  "ssl_email": "$CFG_SSL_EMAIL"
-}
-EOF
-
-    # Create deployment script
-    cat > "$temp_deploy_dir/deploy.sh" <<'EOF'
-#!/bin/bash
-set -euo pipefail
-
-DEPLOY_DIR="/tmp/apache_deploy"
-WEB_ROOT="/var/www/html"
-
-echo "Starting Apache deployment..."
-
-# Make provision script executable and run it
-chmod +x "$DEPLOY_DIR/provision.sh"
-sudo "$DEPLOY_DIR/provision.sh"
-
-echo "Apache deployment completed successfully!"
-EOF
-
-    # Package everything
-    local tarball="/tmp/apache_deploy.tar.gz"
-    tar czf "$tarball" -C "$temp_deploy_dir" . || {
-        echo "Error: Failed to create deployment tarball" >&2
-        rm -rf "$temp_deploy_dir" "$obfuscated_dir"
-        return 1
-    }
-
-    # Copy tarball to remote
-    echo "Uploading deployment package..."
-    gcloud compute scp "$tarball" "$instance_name:/tmp/apache_deploy.tar.gz" --zone "$instance_zone" || {
-        echo "Error: Failed to upload deployment package" >&2
-        rm -rf "$temp_deploy_dir" "$obfuscated_dir" "$tarball"
-        return 1
-    }
-
-    # Extract and run deployment on remote
-    local remote_deploy_cmd="
-        cd /tmp && \
-        sudo mkdir -p /tmp/apache_deploy && \
-        sudo tar xzf apache_deploy.tar.gz -C /tmp/apache_deploy && \
-        sudo chmod +x /tmp/apache_deploy/deploy.sh && \
-        sudo /tmp/apache_deploy/deploy.sh && \
-        # Only copy actual web content, not management scripts
-        sudo cp -r /tmp/apache_deploy/static /var/www/html/ 2>/dev/null || true && \
-        sudo cp -r /tmp/apache_deploy/templates /var/www/html/ 2>/dev/null || true && \
-        sudo cp /tmp/apache_deploy/index.html /var/www/html/ 2>/dev/null || true && \
-        sudo cp /tmp/apache_deploy/.htaccess /var/www/html/ 2>/dev/null || true && \
-        # Clean up any management scripts that might have been copied to web root previously
-        sudo rm -f /var/www/html/deploy.sh /var/www/html/provision.sh /var/www/html/deploy_config.json && \
-        sudo chown -R www-data:www-data /var/www/html/ && \
-        sudo chmod -R 755 /var/www/html/
-    "
-    
-    echo "Executing deployment on remote server..."
-    gcloud compute ssh "$instance_name" --zone "$instance_zone" --command="$remote_deploy_cmd" || {
-        echo "Error: Failed to execute deployment on remote server" >&2
-        rm -rf "$temp_deploy_dir" "$obfuscated_dir" "$tarball"
-        return 1
-    }
-
-    # Cleanup
-    rm -rf "$temp_deploy_dir" "$obfuscated_dir" "$tarball"
-
-    # Show appropriate final message based on URL type
-    if [[ "$CFG_PRODUCTION_EXTERNAL_URL" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-        echo "Deployment successful."
-        echo "Site available at: http://$CFG_PRODUCTION_EXTERNAL_URL"
-    else
-        local primary_domain
-        primary_domain=$(echo "$CFG_PRODUCTION_EXTERNAL_URL" | cut -d, -f1)
-        echo "Deployment successful."
-        echo "Site available at: https://$primary_domain"
-        echo "All configured domains: $CFG_PRODUCTION_EXTERNAL_URL"
-        echo "Note: SSL is enabled only for domains that passed DNS validation."
-    fi
-    return 0
-}
-
-#======================================
-# Build Functions (Simplified for Static Deployment)
-#======================================
-
-# Function to prepare static files (replaces Docker build)
-prepare_static() {
+# Function to prepare the public directory for deployment
+prepare_deployment() {
     local deployment_type="$1"
-    local deployment_name="$2"
+    local src_dir="$_DEPLOY_SCRIPT_DIR/../src"
+    local public_dir="$_DEPLOY_SCRIPT_DIR/../public"
     
-    echo "Preparing static files for $deployment_type deployment..."
+    echo "Preparing public directory for $deployment_type deployment..."
     
-    # Create obfuscated files
-    local obfuscated_dir
-    obfuscated_dir=$(obfuscate_src) || {
-        echo "Error: Failed to prepare static files" >&2
-        return 1
-    }
+    # 1. Clean and recreate public directory
+    rm -rf "$public_dir"
     
-    echo "Static files prepared successfully in: $obfuscated_dir"
-    
-    # For local development, we might want to keep files for inspection
-    if [ "$deployment_type" == "local" ]; then
-        local backup_dir="$_DEPLOY_SCRIPT_DIR/../.local_build"
-        rm -rf "$backup_dir"
-        cp -r "$obfuscated_dir" "$backup_dir"
-        echo "Local build backup saved to: $backup_dir"
+    # 2. Handle deployment directory based on type
+    if [ "$deployment_type" == "remote" ]; then
+        echo "Creating obfuscated version of $src_dir in $public_dir..."
+        mkdir -p "$public_dir"
+        obfuscate_src "$src_dir" "$public_dir" || return 1
+        # 3. Generate the dynamic config.js directly into public/static/
+        template_files "$deployment_type" "$public_dir" "y" || return 1
+    else
+        # For local, use a symlink to src for live updates
+        echo "Creating symlink from $src_dir to $public_dir for live updates..."
+        ln -s "$src_dir" "$public_dir"
+        # 3. Generate the dynamic config.js directly into src/static/
+        # This ensures the emulator sees the correct local config
+        template_files "$deployment_type" "$src_dir" "y" || return 1
     fi
     
-    # Cleanup temp obfuscated directory
-    rm -rf "$obfuscated_dir"
+    echo "Public directory prepared successfully in: $public_dir"
     return 0
 }
-
-#======================================
-# Terraform Functions (Simplified)
-#======================================
-
-# Function to run Terraform init, plan, and apply
-terraform_update() {
-    local confirm_tf_apply="$1"
-    local terraform_dir="$_DEPLOY_SCRIPT_DIR/../terraform"
-    local tf_exit_code=0
-
-    echo "Running Terraform update for Apache server..."
-
-    ( # Start subshell for Terraform
-        cd "$terraform_dir" || { echo "Error: Could not change directory to '$terraform_dir'." >&2; exit 1; }
-        terraform init -upgrade || { echo "Error: Terraform initialization failed." >&2; exit 1; }
-        echo "Terraform initialized."
-        terraform plan -out=tfplan || { echo "Error: Terraform plan generation failed." >&2; rm -f tfplan; exit 1; }
-        echo "The Terraform plan was generated and saved to '$terraform_dir/tfplan'."
-        local tf_apply_status=1
-        echo "--------------------------------------------------"
-        echo "Review the generated plan using: terraform show tfplan"
-        
-        # Check if there are any changes in the plan
-        local has_changes=$(terraform show -no-color tfplan | grep -q 'No changes.'; echo $?)
-        if [ $has_changes -eq 0 ]; then
-            echo "No changes detected in Terraform plan. Skipping apply."
-            tf_apply_status=0
-        elif [[ "$confirm_tf_apply" =~ ^[Yy] ]]; then
-            echo "Proceeding with Terraform apply based on user confirmation..."
-            terraform apply tfplan
-            tf_apply_status=$?
-            [ $tf_apply_status -ne 0 ] && echo "Error: Terraform apply command failed (Exit Code: $tf_apply_status)." >&2
-        else
-            echo "Terraform apply was skipped based on user confirmation." >&2
-            tf_apply_status=2 # Specific user cancel/skip status
-        fi
-        echo "--------------------------------------------------"
-        rm -f tfplan
-        exit $tf_apply_status
-    ) # End subshell
-    tf_exit_code=$?
-
-    # Return the exit code from the subshell
-    return $tf_exit_code
-}
-
-# Function to destroy Terraform-managed infrastructure
-terraform_destroy() {
-    local confirm_tf_destroy="$1"
-    local terraform_dir="$_DEPLOY_SCRIPT_DIR/../terraform"
-    local tf_exit_code=0
-
-    echo "Attempting to destroy remote infrastructure..."
-
-    if [[ ! "$confirm_tf_destroy" =~ ^[Yy] ]]; then
-        echo "Terraform destroy was cancelled by user." >&2
-        return 2 # Specific user cancel status
-    fi
-
-    echo "WARNING: This will destroy all infrastructure defined in $terraform_dir managed by Terraform." >&2
-    echo "Proceeding with Terraform destroy based on user confirmation..."
-
-    ( # Start subshell for Terraform
-        cd "$terraform_dir" || { echo "Error: Could not change directory to '$terraform_dir'." >&2; exit 1; }
-        terraform init -upgrade || { echo "Error: Terraform initialization failed." >&2; exit 1; }
-        echo "Terraform initialized."
-
-        terraform destroy -auto-approve
-        tf_exit_code=$?
-        [ $tf_exit_code -ne 0 ] && echo "Error: Terraform destroy command failed (Exit Code: $tf_exit_code)." >&2
-
-        exit $tf_exit_code
-    ) # End subshell
-    tf_exit_code=$?
-
-    if [ $tf_exit_code -eq 0 ]; then
-        echo "Terraform destroy completed successfully."
-    else
-        echo "Terraform destroy failed." >&2
-    fi
-
-    # Return the exit code from the subshell
-    return $tf_exit_code
-}
-
-#======================================
-# Main Deployment Function
-#======================================
 
 # Function to run the full deployment process
 deploy() {
     local deployment_type="$1"
-    local deployment_name="${2:-apache-server}"
-    local confirm_tf_apply="${3:-n}"
+    local deployment_name="${2:-website}"
     
     [ -z "$deployment_type" ] && { echo "Error: Deployment type is required." >&2; return 1; }
 
-    echo "Starting Apache deployment process..."
+    echo "Starting Firebase deployment process..."
     echo "Type: $deployment_type"
     echo "Name: $deployment_name"
 
     # Ensure required tools are installed
     echo "Checking required tools..."
     check_nodejs || { echo "Error: Node.js installation failed." >&2; return 1; }
-    
-    if [ "$deployment_type" == "local" ]; then
-        check_apache || { echo "Error: Apache installation failed." >&2; return 1; }
-    elif [ "$deployment_type" == "remote" ]; then
-        check_terraform || { echo "Error: Terraform installation failed." >&2; return 1; }
+    check_firebase_cli || { echo "Error: Firebase CLI setup failed." >&2; return 1; }
+
+    if [ "$deployment_type" == "remote" ]; then
+        local project_id="$CFG_GCP_PROJECT_ID"
+        [ -z "$project_id" ] && { echo "Error: GCP project ID is not set in config.json." >&2; return 1; }
+        
+        echo "Using GCP project from config: $project_id"
+        
+        # Ensure Firebase Hosting APIs are enabled
+        echo "Ensuring Firebase Hosting APIs are enabled for project '$project_id'..."
+        gcloud services enable firebase.googleapis.com firebasehosting.googleapis.com --project "$project_id" || {
+            echo "Error: Failed to enable Firebase APIs." >&2
+            return 1
+        }
+
+        # Ensure project and site are initialized (idempotent, using REST API for robust checks)
+        local site_name="servercult"
+        echo "Ensuring project '$project_id' and site '$site_name' are initialized..."
+        
+        local token
+        token=$(gcloud auth print-access-token)
+
+        # 1. Check if project is initialized for Firebase
+        local proj_status
+        proj_status=$(curl -s -o /dev/null -w "%{http_code}" -X GET "https://firebase.googleapis.com/v1beta1/projects/$project_id" \
+             -H "Authorization: Bearer $token" \
+             -H "X-Goog-User-Project: $project_id")
+
+        if [ "$proj_status" == "404" ]; then
+            echo "Project '$project_id' is not a Firebase project. Initializing..."
+            firebase projects:addfirebase "$project_id" --non-interactive || { echo "Error: Failed to initialize Firebase project." >&2; return 1; }
+        elif [ "$proj_status" != "200" ]; then
+            echo "Error: Unexpected API response ($proj_status) while checking project status." >&2
+            return 1
+        fi
+
+        # 2. Check if hosting site exists
+        local site_status
+        site_status=$(curl -s -o /dev/null -w "%{http_code}" -X GET "https://firebasehosting.googleapis.com/v1beta1/projects/$project_id/sites/$site_name" \
+             -H "Authorization: Bearer $token" \
+             -H "X-Goog-User-Project: $project_id")
+
+        if [ "$site_status" == "404" ]; then
+            echo "Site '$site_name' not found. Creating it..."
+            firebase hosting:sites:create "$site_name" --project "$project_id" --non-interactive || { echo "Error: Failed to create hosting site." >&2; return 1; }
+        elif [ "$site_status" != "200" ]; then
+            echo "Error: Unexpected API response ($site_status) while checking site status." >&2
+            return 1
+        fi
+
+        # Disable the default site if it's not our target
+        if [ "$project_id" != "$site_name" ]; then
+            echo "Ensuring default site '$project_id' is disabled..."
+            firebase hosting:disable --site "$project_id" --project "$project_id" --force 2>/dev/null || true
+        fi
     fi
 
+    # Prepare the public directory (Obfuscate + Template)
+    # This now happens AFTER Firebase setup for remote
+    prepare_deployment "$deployment_type" || {
+        echo "Error: Failed to prepare deployment files." >&2
+        return 1
+    }
+
     if [ "$deployment_type" == "local" ]; then
-        # Local deployment
-        stage_local "$deployment_name" || {
-            echo "Error: Local deployment failed." >&2
-            return 1
-        }
-        echo "Local Apache deployment completed successfully!"
-        
+        local active_port="${CFG_LOCAL_HTTP_PORT:-5000}"
+        echo "Starting local Firebase emulator on port $active_port..."
+        ( cd "$_DEPLOY_SCRIPT_DIR/.." && firebase serve --only hosting --port "$active_port" )
     elif [ "$deployment_type" == "remote" ]; then
-        # Remote deployment
+        local project_id="$CFG_GCP_PROJECT_ID"
+        echo "Deploying to Firebase Hosting..."
+        ( cd "$_DEPLOY_SCRIPT_DIR/.." && firebase deploy --only hosting --project "$project_id" )
+        echo "Deployment successful!"
         
-        # Run Terraform if confirmed
-        if [[ "$confirm_tf_apply" =~ ^[Yy] ]]; then
-            terraform_update "$confirm_tf_apply" || {
-                echo "Error: Terraform deployment failed." >&2
-                return 1
-            }
-        else
-            echo "Skipping Terraform operations (not confirmed)."
+        # Ensure custom domains are configured
+        if [ -n "$CFG_EXTERNAL_URL" ]; then
+            echo "Ensuring custom domains are configured for site '$site_name'..."
+            IFS=',' read -ra ADDR <<< "$CFG_EXTERNAL_URL"
+            for domain in "${ADDR[@]}"; do
+                domain=$(echo "$domain" | xargs) # trim whitespace
+                domain="${domain#*://}"
+                # Attempt to create the custom domain mapping (ignore errors if it already exists)
+                curl -s -X POST "https://firebasehosting.googleapis.com/v1beta1/projects/$project_id/sites/$site_name/customDomains?customDomainId=$domain" \
+                     -H "Authorization: Bearer $(gcloud auth print-access-token)" \
+                     -H "X-Goog-User-Project: $project_id" \
+                     -H "Content-Type: application/json" \
+                     -d "{
+                       \"name\": \"projects/$project_id/sites/$site_name/customDomains/$domain\"
+                     }" > /dev/null
+            done
+
+            # Get all domains for the site in one go
+            echo "Retrieving DNS verification records for all domains..."
+            local domains_json
+            domains_json=$(curl -s -X GET "https://firebasehosting.googleapis.com/v1beta1/projects/$project_id/sites/$site_name/customDomains" \
+                 -H "Authorization: Bearer $(gcloud auth print-access-token)" \
+                 -H "X-Goog-User-Project: $project_id")
+
+            echo "--------------------------------------------------"
+            echo "REQUIRED DNS RECORDS"
+            echo "--------------------------------------------------"
+            
+            local show_verify=false
+            
+            # Extract records for all domains from the list response
+            echo "$domains_json" | jq -c '.customDomains[]?' | while read -r domain_obj; do
+                local main_domain
+                main_domain=$(echo "$domain_obj" | jq -r '.name | split("/") | last')
+                
+                echo "DOMAIN: $main_domain"
+                
+                # 1. Main required DNS updates
+                local main_records
+                main_records=$(echo "$domain_obj" | jq -c '.requiredDnsUpdates.desired[].records[]?' 2>/dev/null)
+                if [ -n "$main_records" ]; then
+                    echo "$main_records" | while read -r record; do
+                        [ -z "$record" ] && continue
+                        local action
+                        action=$(echo "$record" | jq -r '.requiredAction // "VERIFY"')
+                        if [ "$show_verify" == "true" ] || [ "$action" == "ADD" ]; then
+                            local type val host
+                            type=$(echo "$record" | jq -r '.type')
+                            val=$(echo "$record" | jq -r '.rdata')
+                            host=$(echo "$record" | jq -r '.domainName')
+                            
+                            echo "Type: $type"
+                            echo "Host: $host"
+                            echo "Value: $val"
+                            echo "Action: $action"
+                            echo "---"
+                        fi
+                    done
+                fi
+
+                # 2. SSL/Cert verification records
+                local cert_records
+                cert_records=$(echo "$domain_obj" | jq -c '.cert.verification.dns.desired[].records[]?' 2>/dev/null)
+                if [ -n "$cert_records" ]; then
+                    echo "$cert_records" | while read -r record; do
+                        [ -z "$record" ] && continue
+                        local action
+                        action=$(echo "$record" | jq -r '.requiredAction // "ADD"')
+                        if [ "$show_verify" == "true" ] || [ "$action" == "ADD" ]; then
+                            local type val host
+                            type=$(echo "$record" | jq -r '.type')
+                            val=$(echo "$record" | jq -r '.rdata')
+                            host=$(echo "$record" | jq -r '.domainName')
+                            
+                            echo "Type: $type"
+                            echo "Host: $host"
+                            echo "Value: $val"
+                            echo "Action: $action"
+                            echo "---"
+                        fi
+                    done
+                fi
+                echo "--------------------------------------------------"
+            done
         fi
-        
-        # Get instance details from Terraform output
-        local instance_name=""
-        local instance_zone="us-central1-a"
-        
-        if command -v terraform &>/dev/null && [ -f "$_DEPLOY_SCRIPT_DIR/../terraform/terraform.tfstate" ]; then
-            instance_name=$(cd "$_DEPLOY_SCRIPT_DIR/../terraform" && terraform output -raw instance_name 2>/dev/null || echo "")
-            instance_zone=$(cd "$_DEPLOY_SCRIPT_DIR/../terraform" && terraform output -raw instance_zone 2>/dev/null || echo "$instance_zone")
-        fi
-        
-        if [ -z "$instance_name" ]; then
-            echo "Error: Could not determine instance name from Terraform output." >&2
-            return 1
-        fi
-        
-        # Deploy to remote server
-        stage_remote "$instance_name" "$instance_zone" "$deployment_name" || {
-            echo "Error: Remote deployment failed." >&2
-            return 1
-        }
-        
-        # Access information is already shown by stage_remote function
     else
         echo "Error: Invalid deployment type '$deployment_type'. Use 'local' or 'remote'." >&2
-             return 1
+        return 1
     fi
 
     return 0
 }
 
 # Export functions to make them available in the shell scope
-export -f prepare_static
-export -f stage_remote
-export -f stage_local
-export -f terraform_update
-export -f terraform_destroy
 export -f deploy
+export -f prepare_deployment
 export -f obfuscate_src
+export -f obfuscate_js
+export -f minify_css
+export -f minify_html
 
 # Minimal execution logic if called directly (for sourcing verification)
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then

@@ -5,27 +5,7 @@ get_project_id() {
     gcloud config get-value project 2>/dev/null
 }
 
-# Function to check and install Terraform
-check_terraform() {
-    if command -v terraform &>/dev/null; then
-        echo "Terraform installation was verified."
-        return 0
-    fi
-    echo "Terraform is not installed. Attempting installation."
-    local tf_repo="deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main"
-    local tf_repo_file="/etc/apt/sources.list.d/hashicorp.list"
-    
-    wget -O- https://apt.releases.hashicorp.com/gpg | gpg --dearmor | sudo tee /usr/share/keyrings/hashicorp-archive-keyring.gpg > /dev/null || { echo "Error: Failed to add HashiCorp GPG key." >&2; return 1; }
-    
-    if [ ! -f "$tf_repo_file" ] || ! grep -qF "$tf_repo" "$tf_repo_file"; then
-        echo "$tf_repo" | sudo tee "$tf_repo_file" > /dev/null || { echo "Error: Failed to add HashiCorp repository." >&2; return 1; }
-    fi
-    
-    sudo apt update && sudo apt install -y terraform || { echo "Error: Failed to install Terraform." >&2; return 1; }
-    echo "Terraform was installed successfully."
-}
-
-# Function to check and setup GCP SDK and environment (simplified for Apache deployment)
+# Function to check and setup GCP SDK and environment
 check_gcp() {
     if ! command -v gcloud &>/dev/null; then
         echo "Google Cloud SDK is not installed. Attempting installation."
@@ -37,10 +17,22 @@ check_gcp() {
         fi
         
         curl https://packages.cloud.google.com/apt/doc/apt-key.gpg | sudo apt-key --keyring /usr/share/keyrings/cloud.google.gpg add - || { echo "Error: Adding the GCloud key failed." >&2; return 1; }
-        sudo apt update && sudo apt install -y google-cloud-sdk || { echo "Error: Installing the GCloud SDK failed." >&2; return 1; }
-        echo "Google Cloud SDK was installed successfully."
+        sudo apt update && sudo apt install -y google-cloud-sdk google-cloud-sdk-app-engine-python google-cloud-sdk-app-engine-python-extras google-cloud-sdk-beta || { echo "Error: Installing the GCloud SDK and components failed." >&2; return 1; }
+        echo "Google Cloud SDK and beta components were installed successfully."
     else
-        echo "Google Cloud SDK installation was verified."
+        echo "Google Cloud SDK installation was verified. Ensuring beta components are present..."
+        # Check if beta component is installed, if not try to install it
+        if ! gcloud components list --filter="id:beta" --format="value(id)" | grep -q "beta"; then
+            echo "GCloud beta components not found. Attempting installation..."
+            # For apt-based installs, we should use apt to install the component package
+            if command -v apt-get &>/dev/null; then
+                sudo apt-get update && sudo apt-get install -y google-cloud-sdk-beta || echo "Warning: Could not install google-cloud-sdk-beta via apt. Trying gcloud components install..."
+            fi
+            # Fallback to gcloud's own component manager if apt didn't work or isn't used
+            gcloud components install beta --quiet || echo "Warning: Failed to install beta components. Some commands may fail."
+        else
+            echo "GCloud beta components verified."
+        fi
     fi
 
     if ! gcloud auth list --filter=status:ACTIVE --format="value(account)" &>/dev/null; then
@@ -55,8 +47,6 @@ check_gcp() {
     if [ -z "$project_id" ] || [ "$project_id" = "(unset)" ]; then
         echo "No GCP project is configured."
         read -p "Enter your GCP project ID: " new_project_id
-        read -p "Enter your GCP project name: " project_name
-        gcloud projects create "$new_project_id" --name="$project_name" || echo "Project creation might have failed (the project may already exist)." >&2
         gcloud config set project "$new_project_id" || { echo "Error: Setting the project failed." >&2; return 1; }
         project_id="$new_project_id"
         echo "The GCP project was set to: $project_id."
@@ -75,37 +65,13 @@ check_gcp() {
         echo "Billing was verified for project $project_id."
     fi
 
-    # Enable necessary APIs for VM deployment
-    gcloud services enable compute.googleapis.com cloudresourcemanager.googleapis.com iam.googleapis.com --project="$project_id" || { echo "Error: Enabling one or more required GCP services failed." >&2; return 1; }
+    # Enable necessary APIs for Firebase deployment
+    echo "Enabling required Google Cloud services..."
+    gcloud services enable firebasehosting.googleapis.com cloudresourcemanager.googleapis.com --project="$project_id" || { echo "Error: Enabling one or more required GCP services failed." >&2; return 1; }
     echo "Required Google Cloud services were enabled."
 }
 
-# Function to check and install Apache and related tools
-check_apache() {
-    if command -v apache2 &>/dev/null; then
-        echo "Apache installation was verified."
-        return 0
-    fi
-    echo "Apache is not installed. Attempting installation."
-    
-    # Update package list
-    sudo apt-get update || { echo "Error: Failed to update package list." >&2; return 1; }
-    
-    # Install Apache, PHP, and related tools
-    sudo apt-get install -y apache2 php libapache2-mod-php certbot python3-certbot-apache wget curl tar gzip || { echo "Error: Failed to install Apache and related packages." >&2; return 1; }
-    
-    # Enable Apache modules
-    sudo a2enmod rewrite || { echo "Warning: Failed to enable rewrite module." >&2; }
-    sudo a2enmod ssl || { echo "Warning: Failed to enable SSL module." >&2; }
-    
-    # Enable and start Apache service
-    sudo systemctl enable apache2 || { echo "Warning: Failed to enable Apache service." >&2; }
-    sudo systemctl start apache2 || { echo "Warning: Failed to start Apache service." >&2; }
-    
-    echo "Apache was installed and configured successfully."
-}
-
-# Function to check and install Node.js for JavaScript obfuscation
+# Function to check and install Node.js
 check_nodejs() {
     if command -v node &>/dev/null && command -v npm &>/dev/null; then
         echo "Node.js and npm installation was verified."
@@ -118,6 +84,30 @@ check_nodejs() {
     sudo apt-get install -y nodejs || { echo "Error: Failed to install Node.js." >&2; return 1; }
     
     echo "Node.js and npm were installed successfully."
+}
+
+# Function to check and install Firebase CLI
+check_firebase_cli() {
+    if command -v firebase &>/dev/null; then
+        echo "Firebase CLI installation was verified."
+        return 0
+    fi
+
+    echo "Firebase CLI not found. Attempting clean installation..."
+    # Clean up any potentially corrupted global installation directories first
+    # This addresses the ENOTEMPTY error by removing ghost directories
+    sudo rm -rf /usr/lib/node_modules/firebase-tools /usr/lib/node_modules/.firebase-tools* 2>/dev/null
+    
+    # Attempt the installation
+    sudo npm install -g firebase-tools || { echo "Error: Firebase CLI installation failed." >&2; return 1; }
+    
+    if command -v firebase &>/dev/null; then
+        echo "Firebase CLI was installed successfully."
+        return 0
+    fi
+
+    echo "Error: Firebase CLI was installed but still cannot be found in PATH." >&2
+    return 1
 }
 
 # Ensure jq is installed

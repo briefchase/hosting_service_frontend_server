@@ -31,9 +31,9 @@ source "$_GO_SCRIPT_DIR/scripts/utilities.sh" || { echo "Error: Failed to source
 #======================================
 
 show_menu() {
-    echo "--- Apache Server Menu ---"
-    echo " 1. Deploy Local Apache (localhost)"
-    echo " 2. Deploy Remote Apache (GCP)"
+    echo "--- Firebase Hosting Menu ---"
+    echo " 1. Deploy Local (Emulator)"
+    echo " 2. Deploy Remote (Firebase)"
     echo " 3. Nuke Menu"
     echo " 4. Exit"
     echo "-------------------------"
@@ -41,9 +41,8 @@ show_menu() {
 
 show_nuke_menu() {
     echo "--- Nuke Menu ---"
-    echo "1. Nuke Local (Clean Apache)"
-    echo "2. Nuke Remote (Destroy GCP Infrastructure)"
-    echo "3. Back to Main Menu"
+    echo "1. Nuke Local (Clean Public)"
+    echo "2. Back to Main Menu"
     echo "-------------------"
 }
 
@@ -61,7 +60,7 @@ while true; do
     CONFIRM_DOCKER_PUSH="n"; CONFIRM_TF_APPLY="n"; CONFIRM_TF_DESTROY="n"
 
     case $choice in
-        1) # Update Local (Deploy Apache)
+        1) # Update Local (Firebase Emulator)
            deployment_type="local"
            
            read -p "skip config? (y/n) [default: y]: " skip_config_input
@@ -69,28 +68,21 @@ while true; do
 
            if [[ "$skip_config" =~ ^[Yy]$ ]]; then
                 echo "Skipping interactive configuration and using saved values."
-                load_config # This populates the CFG_ variables
+                load_config "$deployment_type"
            else
-               echo "Starting local Apache deployment..."
-               # Configure local deployment
-               configure_deployment "$_GO_SCRIPT_DIR" "$deployment_type" || operation_failed=true
+               echo "Starting local configuration..."
+               load_config "$deployment_type" || operation_failed=true
+               if [ "$operation_failed" = false ]; then
+                   configure_deployment "$_GO_SCRIPT_DIR" "$deployment_type" || operation_failed=true
+               fi
            fi
            
            if [ "$operation_failed" = false ]; then
-               # Simple deployment for local - just need deployment name
-               deployment_name="${CFG_DEPLOYMENT_NAME:-apache-local}"
-               if [[ ! "$skip_config" =~ ^[Yy]$ ]]; then
-                   read -p "Enter deployment name [default: $deployment_name]: " input_name
-                   deployment_name="${input_name:-$deployment_name}"
-                   CFG_DEPLOYMENT_NAME="$deployment_name"  # Save for next time
-                   save_config  # Save the updated deployment name
-               fi
-               
-               # Call simplified deploy function - 3 arguments: type, name, tf_confirm
-               deploy "$deployment_type" "$deployment_name" "n" || operation_failed=true
+               deployment_name="${CFG_DEPLOYMENT_NAME:-website-local}"
+               deploy "$deployment_type" "$deployment_name" || operation_failed=true
            fi
            ;;
-        2) # Update Remote (Deploy Apache to GCP)
+        2) # Update Remote (Firebase Hosting)
            deployment_type="remote"
            
            read -p "skip config? (y/n) [default: y]: " skip_config_input
@@ -98,79 +90,42 @@ while true; do
 
            if [[ "$skip_config" =~ ^[Yy]$ ]]; then
                 echo "Skipping interactive configuration and using saved values."
-                load_config # This populates the CFG_ variables
-                # Check for required values
-                if [[ -z "$CFG_PRODUCTION_EXTERNAL_URL" ]]; then
-                    echo "Error: PRODUCTION_EXTERNAL_URL is required for remote deployment but is not configured." >&2
-                    echo "Please run the deployment again without skipping config to set the URL." >&2
-                    operation_failed=true
-                fi
-                deployment_name="${CFG_DEPLOYMENT_NAME:-apache-remote}"
+                load_config "$deployment_type"
            else
-               echo "Starting remote Apache deployment to GCP..."
-               # Configure remote deployment (this will prompt for SSL email, domain, etc.)
-               configure_deployment "$_GO_SCRIPT_DIR" "$deployment_type" || operation_failed=true
-
+               echo "Starting remote configuration..."
+               load_config "$deployment_type" || operation_failed=true
                if [ "$operation_failed" = false ]; then
-                   # Simple deployment for remote - just need deployment name
-                   deployment_name="${CFG_DEPLOYMENT_NAME:-apache-remote}"
-                   read -p "Enter deployment name [default: $deployment_name]: " input_name
-                   deployment_name="${input_name:-$deployment_name}"
-                   CFG_DEPLOYMENT_NAME="$deployment_name"  # Save for next time
-                   save_config  # Save the updated deployment name
+                   configure_deployment "$_GO_SCRIPT_DIR" "$deployment_type" || operation_failed=true
                fi
            fi
            
            if [ "$operation_failed" = false ]; then
-               # Use the tf_confirm from configuration
-               tf_confirm="$CFG_CONFIRM_APPLY"
-               
-               # Call simplified deploy function - 3 arguments: type, name, tf_confirm
-               deploy "$deployment_type" "$deployment_name" "$tf_confirm" || operation_failed=true
+               deployment_name="${CFG_DEPLOYMENT_NAME:-website-remote}"
+               deploy "$deployment_type" "$deployment_name" || operation_failed=true
            fi
            ;;
         3) # Nuke Menu
             while true; do
                 show_nuke_menu
-                read -p "Nuke Menu - Enter choice [1-3]: " nuke_choice
+                read -p "Nuke Menu - Enter choice [1-2]: " nuke_choice
                 echo ""
                 case $nuke_choice in
                     1) # Nuke Local
-                        echo "Attempting to clean local Apache..."
-                        # Call apache_nuke (ensure it is available, though it should be from utilities.sh)
-                        if type apache_nuke &>/dev/null; then
-                            apache_nuke || operation_failed=true
-                        else
-                            echo "Error: apache_nuke function not found." >&2
-                            operation_failed=true
-                        fi
-                        break # Break from nuke menu loop
+                        echo "Cleaning public directory..."
+                        rm -rf "$_GO_SCRIPT_DIR/public"/*
+                        echo "Public directory cleaned."
+                        break
                         ;;
-                    2) # Nuke Remote
-                        echo "Attempting to destroy remote GCP infrastructure..."
-                        # Prompt for Terraform destroy confirmation
-                        read -p "Are you sure you want to destroy remote Terraform infrastructure? (y/n): " confirm_tf_destroy
-                        confirm_tf_destroy="${confirm_tf_destroy:-n}"
-                        
-                        # Call terraform_destroy directly
-                        if type terraform_destroy &>/dev/null; then
-                            terraform_destroy "$confirm_tf_destroy" || operation_failed=true
-                        else
-                            echo "Error: terraform_destroy function not found." >&2
-                            operation_failed=true
-                        fi
-                        break # Break from nuke menu loop
-                        ;;
-                    3) # Back to Main Menu
+                    2) # Back to Main Menu
                         echo "Returning to main menu..."
-                        break # Break from nuke menu loop
+                        break
                         ;;
                     *)
-                        echo "Invalid choice for Nuke Menu [1-3]." >&2
+                        echo "Invalid choice for Nuke Menu [1-2]." >&2
                         operation_failed=true
                         ;;
                 esac
-                if [[ "$nuke_choice" -ge 1 && "$nuke_choice" -le 3 ]]; then
+                if [[ "$nuke_choice" -ge 1 && "$nuke_choice" -le 2 ]]; then
                     break
                 fi
             done
