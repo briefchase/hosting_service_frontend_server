@@ -9,7 +9,7 @@ import {
 
 const API_BASE_URL = CONFIG.API_BASE_URL;
 import { requireAuthAndSubscription } from '/static/scripts/authenticate.js';
-import { fetchSites as apiFetchSites } from '/static/scripts/api.js';
+import { fetchState } from '/static/scripts/api.js';
 import { prompt } from '/static/pages/prompt.js';
 
 // No more global cache. Data is fetched on demand.
@@ -25,10 +25,13 @@ function generateSiteDetailsMenu(site) {
     }
 
     let detailItems = [
-        { id: `details-machine-name-${site.id}`, text: `Machine: ${site.machine_name || 'Unknown'}`, type: 'record' },
         { id: `details-status-${site.id}`, text: `Status: ${site.status || 'Unknown'}`, type: 'record' },
-        { id: `details-schedule-${site.id}`, text: `Backups: ${site.backup_schedule || 'manual'}`, type: 'record' },
     ];
+
+    if (site.infrastructure === 'vm') {
+        detailItems.unshift({ id: `details-machine-name-${site.id}`, text: `Machine: ${site.machine_name || 'Unknown'}`, type: 'record' });
+        detailItems.push({ id: `details-schedule-${site.id}`, text: `Backups: ${site.backup_schedule || 'manual'}`, type: 'record' });
+    }
 
     if (site.status !== 'provisioning') {
         let address = 'N/A';
@@ -50,6 +53,9 @@ function generateSiteDetailsMenu(site) {
             if (site.domain) {
                 addressUrl = `https://${site.domain}`;
                 address = addressUrl;
+            } else if (site.infrastructure === 'firebase' && site.default_url) {
+                addressUrl = site.default_url;
+                address = addressUrl;
             } else if (site.ip_address && site.port) {
                 addressUrl = `http://${site.ip_address}:${site.port}`;
                 address = addressUrl;
@@ -69,6 +75,17 @@ function generateSiteDetailsMenu(site) {
             detailItems.push({ id: `details-front-page-${site.id}`, text: 'front page', type: 'button', action: 'openAddress', url: addressUrl });
         }
 
+        if (site.infrastructure === 'firebase') {
+            detailItems.push({ 
+                id: `details-edit-${site.id}`, 
+                text: 'edit', 
+                type: 'button', 
+                action: 'openEditor', 
+                site_id: site.site_id, 
+                deployment_name: site.id 
+            });
+        }
+
         if (site.wordpress && site.status !== 'relinking') {
             const adminUrl = addressUrl ? `${addressUrl}/wp-admin` : null;
             if (adminUrl) {
@@ -86,46 +103,64 @@ function generateSiteDetailsMenu(site) {
             action: 'destroyDeployment', 
             showLoading: true, // Opt-in to the generic loading UI
             resourceId: site.id,
-            deployment: site.deployment,
-            machineId: site.project_id
+            deployment: site.id,
+            infrastructure: site.infrastructure,
+            machineId: site.machine_id || 'firebase'
         });
     }
 
     return {
         id: `site-details-menu-${site.id}`,
-        text: `Site: ${site.name}`,
+        text: `Site: ${site.id}`,
         items: detailItems,
         backTarget: 'site-list-menu'
     };
 }
 
 async function fetchAndProcessDeployments() {
-    const vms = await apiFetchSites();
-        let allDeployments = [];
-        if (Array.isArray(vms)) {
-            vms.forEach(vm => {
-                if (vm.deployments && vm.deployments.length > 0) {
-                    const deployments = vm.deployments.map(dep => ({
-                        id: `${vm.id}-${dep.deployment_name}`,
-                        name: dep.deployment_name,
-                    deployment: dep.deployment_name,
-                    project_id: vm.id,
-                        machine_name: vm.name,
-                        status: dep.status,
-                        ip_address: vm.ip_address,
-                        domain: dep.domain,
-                        port: dep.port,
+    const state = await fetchState();
+    const { compute, firebase } = state;
+    let allDeployments = [];
+
+    // 1. Process Compute (VM) deployments
+    if (Array.isArray(compute)) {
+        compute.forEach(vm => {
+            if (vm.deployments && vm.deployments.length > 0) {
+                const deployments = vm.deployments.map(dep => ({
+                    id: dep.deployment_name,
+                    machine_id: vm.id,
+                    machine_name: vm.name,
+                    status: dep.status,
+                    ip_address: vm.ip_address,
+                    domain: dep.domain,
+                    port: dep.port,
                     wordpress: dep.wordpress,
-                        zone: vm.zone,
-                        backup_schedule: dep.backup_schedule,
-                        relinking_target_for: dep.relinking_target_for,
-                        relinking_source_for: dep.relinking_source_for,
-                    type: 'deployment'
-                    }));
-                    allDeployments.push(...deployments);
-                }
+                    zone: vm.zone,
+                    backup_schedule: dep.backup_schedule,
+                    relinking_target_for: dep.relinking_target_for,
+                    relinking_source_for: dep.relinking_source_for,
+                    infrastructure: 'vm'
+                }));
+                allDeployments.push(...deployments);
+            }
+        });
+    }
+
+    // 2. Process Firebase deployments
+    if (Array.isArray(firebase)) {
+        firebase.forEach(site => {
+            // Map Firebase site to the standard deployment structure
+            allDeployments.push({
+                id: site.name,
+                site_id: site.site_id,
+                status: site.status,
+                domain: site.domains && site.domains.length > 0 ? site.domains[0] : null,
+                default_url: site.default_url,
+                infrastructure: 'firebase'
             });
-        }
+        });
+    }
+
     return allDeployments;
 }
 
@@ -134,7 +169,7 @@ function cacheAllSiteMenus(sites) {
             const isDisabled = item.status === 'provisioning';
             return {
                 id: `site-${item.id}`,
-                text: isDisabled ? `${item.name}...` : item.name,
+                text: isDisabled ? `${item.id}...` : item.id,
                 targetMenu: `site-details-menu-${item.id}`,
                 resourceId: item.id,
                 type: 'record',
@@ -170,8 +205,12 @@ async function _listSitesLogic(params) {
 export const listSites = requireAuthAndSubscription(_listSitesLogic, 'view sites'); 
 
 export async function viewSite(params) {
-    const { machineId, deploymentName } = params;
-    const siteId = `${machineId}-${deploymentName}`;
+    const siteId = params.id || params.resourceId;
+
+    if (!siteId) {
+        console.error('viewSite called without site identifier:', params);
+        return;
+    }
 
     // Check if the site details are already cached from a recent fetch.
     if (menus[`site-details-menu-${siteId}`]) {
@@ -231,7 +270,8 @@ export const destroyDeployment = requireAuthAndSubscription(async (params) => {
             method: 'POST',
             body: {
                 vm_id: machineId,
-                deployment: deployment
+                deployment: deployment,
+                infrastructure: params.infrastructure || 'vm'
             }
         });
 

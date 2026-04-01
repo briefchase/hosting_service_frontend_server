@@ -169,6 +169,7 @@ async function _executeDeployment(prepParams, prepResult) {
                 { label: 'yes', value: true },
                 { label: 'no', value: false }
             ],
+            hideBackButton: true,
             id: 'deployment_exit_confirm'
         });
 
@@ -375,7 +376,6 @@ async function communicate(ws, deploymentId) {
     }
 
     function handleDeploymentCompleteEvent(payload) {
-        const machineId = payload.machine_id;
         const deploymentName = payload.deployment_name;
         const promptConfig = {
             id: 'deployment-complete-prompt',
@@ -392,12 +392,11 @@ async function communicate(ws, deploymentId) {
                 ws.close();
             }
 
-            if (result && result.status === 'answered' && result.value === 'view_resource' && machineId && deploymentName) {
-                console.log(`Transitioning to view site: ${deploymentName} on ${machineId}`);
+            if (result && result.status === 'answered' && result.value === 'view_resource' && deploymentName) {
+                console.log(`Transitioning to view site: ${deploymentName}`);
                 _cancelActiveDeployment('view_resource', { 
                     specialNav: 'viewSite', 
-                    machineId: machineId,
-                    deploymentName: deploymentName
+                    id: deploymentName
                 });
             } else {
                 // User clicked OK. Leave them in the terminal.

@@ -16,6 +16,7 @@ CFG_LOCAL_HTTP_PORT=""
 CFG_DEPLOYMENT_NAME=""
 CFG_GCP_PROJECT_ID=""
 CFG_LAST_DEPLOYMENT_TARGET=""
+CFG_GRAPESJS_STUDIO_LICENSE=""
 
 # Target-specific variables (Populated from vars_<target>.json)
 CFG_EXTERNAL_URL=""
@@ -45,6 +46,7 @@ load_config() {
         CFG_DEPLOYMENT_NAME=$(jq -r '.deployment_name // ""' "$JSON_CONFIG_FILE")
         CFG_GCP_PROJECT_ID=$(jq -r '.gcp_project_id // "hoster-server"' "$JSON_CONFIG_FILE")
         CFG_LAST_DEPLOYMENT_TARGET=$(jq -r '.last_deployment_target // "local"' "$JSON_CONFIG_FILE")
+        CFG_GRAPESJS_STUDIO_LICENSE=$(jq -r '.grapesjs_studio_license // ""' "$JSON_CONFIG_FILE")
     fi
 
     # Determine deployment target
@@ -94,7 +96,8 @@ save_config() {
         --arg name "$CFG_DEPLOYMENT_NAME" \
         --arg gcp_project "$CFG_GCP_PROJECT_ID" \
         --arg last_target "$CFG_LAST_DEPLOYMENT_TARGET" \
-        '{ssl_email: $email, local_http_port: $local_http, deployment_name: $name, gcp_project_id: $gcp_project, last_deployment_target: $last_target}')
+        --arg grapes_license "$CFG_GRAPESJS_STUDIO_LICENSE" \
+        '{ssl_email: $email, local_http_port: $local_http, deployment_name: $name, gcp_project_id: $gcp_project, last_deployment_target: $last_target, grapesjs_studio_license: $grapes_license}')
     echo "$master_json" > "$JSON_CONFIG_FILE"
 
     # Save Target-Specific Config
@@ -125,6 +128,9 @@ configure_local_deployment() {
     
     read -p "Enter Log Level [$CFG_LOG_LEVEL]: " log_lvl_input
     CFG_LOG_LEVEL="${log_lvl_input:-$CFG_LOG_LEVEL}"
+
+    read -p "Enter GrapesJS Studio License Key [$CFG_GRAPESJS_STUDIO_LICENSE]: " grapes_license_input
+    CFG_GRAPESJS_STUDIO_LICENSE="${grapes_license_input:-$CFG_GRAPESJS_STUDIO_LICENSE}"
 
     echo "Local deployment configured."
     save_config
@@ -162,6 +168,9 @@ configure_remote_deployment() {
     read -p "Enter GCP Project ID [$CFG_GCP_PROJECT_ID]: " gcp_project_input
     CFG_GCP_PROJECT_ID="${gcp_project_input:-$CFG_GCP_PROJECT_ID}"
     
+    read -p "Enter GrapesJS Studio License Key [$CFG_GRAPESJS_STUDIO_LICENSE]: " grapes_license_input
+    CFG_GRAPESJS_STUDIO_LICENSE="${grapes_license_input:-$CFG_GRAPESJS_STUDIO_LICENSE}"
+
     save_config
     echo "Remote deployment configured for target: $CFG_DEPLOYMENT_TARGET"
 }
@@ -197,6 +206,7 @@ show_configuration() {
     echo "Local HTTP Port: $CFG_LOCAL_HTTP_PORT"
     echo "GCP Project ID: $CFG_GCP_PROJECT_ID"
     echo "SSL Email: $CFG_SSL_EMAIL"
+    echo "GrapesJS Studio License: $CFG_GRAPESJS_STUDIO_LICENSE"
     echo "================================="
 }
 

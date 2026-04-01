@@ -1073,7 +1073,8 @@ body.prompt-overlay-active {
 }
 
 /* Terminal view specific body styles */
-body.terminal-view-active #console-container {
+body.terminal-view-active #console-container,
+body.editor-view-active #console-container {
     position: fixed;
     top: var(--header-height, 56px);
     bottom: var(--header-height, 56px);

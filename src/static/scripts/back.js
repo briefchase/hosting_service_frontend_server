@@ -1,4 +1,5 @@
 let handlerStack = [];
+let shelvedStacks = [];
 
 /**
  * Pushes a new back button handler onto the stack and updates the UI.
@@ -64,6 +65,30 @@ export function replaceBackHandler(handler) {
     } else {
         // If stack is empty, just push it
         pushBackHandler(handler);
+    }
+    _updateUI();
+}
+
+/**
+ * Temporarily sets aside the current back stack and clears the active one.
+ */
+export function shelveStack() {
+    console.log(`[BackStack] Shelving current stack (Depth: ${handlerStack.length})`);
+    shelvedStacks.push([...handlerStack]);
+    handlerStack = [];
+    _updateUI();
+}
+
+/**
+ * Restores the most recently shelved back stack.
+ */
+export function unshelveStack() {
+    if (shelvedStacks.length > 0) {
+        handlerStack = shelvedStacks.pop();
+        console.log(`[BackStack] Unshelved stack (New depth: ${handlerStack.length})`);
+    } else {
+        console.warn('[BackStack] Attempted to unshelve, but no shelved stacks found.');
+        handlerStack = [];
     }
     _updateUI();
 }

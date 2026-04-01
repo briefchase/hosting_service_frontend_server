@@ -4,12 +4,11 @@ import { CONFIG } from '/static/config.js';
 const API_BASE_URL = CONFIG.API_BASE_URL;
 
 /**
- * Fetches all sites/deployments from the API.
- * The backend endpoint remains '/instances' for compatibility.
+ * Fetches the combined state of all infrastructure (Compute and Firebase).
  * @param {object} options - Optional parameters, e.g., { include_schedule: true }.
- * @returns {Promise<Array>} - A promise that resolves to an array of sites.
+ * @returns {Promise<Object>} - A promise that resolves to an object { compute: Array, firebase: Array }.
  */
-export async function fetchSites(options = {}) {
+export async function fetchState(options = {}) {
     let url = `${API_BASE_URL}/instances`;
     if (options.include_schedule) {
         url += '?include_schedule=true';
@@ -17,24 +16,45 @@ export async function fetchSites(options = {}) {
 
     try {
         const response = await fetchWithAuth(url);
-        if (!response.ok) {
-            // The response is not ok, so it's an error. We expect a JSON body.
-            const errorData = await response.json().catch(() => ({ 
-                message: `HTTP error ${response.status}: ${response.statusText}` 
-            }));
+        const data = await response.json().catch(() => ({}));
 
-            // Create a new Error object that includes the structured data.
-            const customError = new Error(errorData.message || 'An unknown error occurred');
-            customError.id = errorData.error; // e.g., 'project_not_initialized'
+        if (!response.ok) {
+            const customError = new Error(data.message || `HTTP error ${response.status}`);
+            customError.id = data.error;
             customError.status = response.status;
-            throw customError; // Throw the structured error.
+            throw customError;
         }
-        // If the response is OK, parse and return the JSON.
-        return await response.json();
+        return data;
     } catch (error) {
-        console.error("Error in fetchSites:", error);
-        // Re-throw the error so the caller can handle it.
-        // This will be either the customError from above or a network error.
+        console.error("Error in fetchState:", error);
+        throw error;
+    }
+}
+
+/**
+ * Fetches only the managed VMs (Compute).
+ * @param {object} options - Optional parameters, e.g., { include_schedule: true }.
+ * @returns {Promise<Array>} - A promise that resolves to an array of machines.
+ */
+export async function fetchMachines(options = {}) {
+    let url = `${API_BASE_URL}/machines`;
+    if (options.include_schedule) {
+        url += '?include_schedule=true';
+    }
+
+    try {
+        const response = await fetchWithAuth(url);
+        const data = await response.json().catch(() => ({}));
+
+        if (!response.ok) {
+            const customError = new Error(data.message || `HTTP error ${response.status}`);
+            customError.id = data.error;
+            customError.status = response.status;
+            throw customError;
+        }
+        return data;
+    } catch (error) {
+        console.error("Error in fetchMachines:", error);
         throw error;
     }
 }

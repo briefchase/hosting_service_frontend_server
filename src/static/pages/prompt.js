@@ -5,7 +5,7 @@ const API_BASE_URL = CONFIG.API_BASE_URL;
 import { getUser, clearPendingReauthAction } from '/static/scripts/authenticate.js';
 import { checkDomainAvailability as apiCheckDomainAvailability } from '/static/scripts/api.js';
 import { openPopup } from '/static/scripts/popup.js';
-import { pushBackHandler, popBackHandler } from '/static/scripts/back.js';
+import { pushBackHandler, popBackHandler, shelveStack, unshelveStack } from '/static/scripts/back.js';
 
 // --- Prompt Mode Management ---
 
@@ -275,9 +275,16 @@ export function clearPromptStack() {
 
 export function prompt(promptConfig) {
     return new Promise(resolve => {
+        // If the prompt should hide the back button, we shelve the current stack.
+        // This ensures the button is hidden and no handlers are active during the prompt.
+        if (promptConfig.hideBackButton) {
+            shelveStack();
+        }
+
         // The Ballet: A prompt pushes its back handler exactly ONCE when it is created.
         // This handler remains on the stack even if the prompt is interrupted by a sub-prompt.
-        if (!promptConfig.noBackHandler) {
+        // If the back button is hidden, we skip this entirely.
+        if (!promptConfig.noBackHandler && !promptConfig.hideBackButton) {
             pushBackHandler(() => {
                 console.log(`[Prompt] Back handler fired for '${promptConfig.id || 'unnamed'}'`);
                 console.log(`Prompt '${promptConfig.id || 'unnamed'}' cancelled via back button`);
@@ -308,9 +315,17 @@ function _processStack() {
 
     _showActualPrompt(config).then(result => {
         console.log(`[Prompt] _showActualPrompt resolved for '${config.id || 'unnamed'}' with status: ${result.status}`);
+        
+        // Restore the shelved stack immediately if it was hidden for THIS prompt.
+        // This must happen before any potential UI refresh (like popBackHandler).
+        if (config.hideBackButton) {
+            unshelveStack();
+        }
+
         // The Ballet: If the user clicked a button (answered), we pop the handler.
-        // If they hit 'Back' (canceled), back.js already popped it, so we skip.
-        if (result.status === 'answered' && config && !config.noBackHandler) {
+        // If they hit 'Back' (canceled), back.js already popped it.
+        // We only pop if we actually pushed one (i.e. hideBackButton was false).
+        if (result.status === 'answered' && config && !config.noBackHandler && !config.hideBackButton) {
             console.log(`[Prompt] Popping handler for answered prompt '${config.id || 'unnamed'}'`);
             popBackHandler();
         }

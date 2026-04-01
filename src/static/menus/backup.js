@@ -10,7 +10,7 @@ import {
 import { CONFIG } from '/static/config.js';
 const API_BASE_URL = CONFIG.API_BASE_URL;
 import { pushBackHandler, replaceBackHandler } from '/static/scripts/back.js';
-import { fetchSites } from '/static/scripts/api.js';
+import { fetchMachines } from '/static/scripts/api.js';
 import { prompt, clearPromptStack } from '/static/pages/prompt.js';
 import { establishWebSocketConnection } from '/static/scripts/socket.js';
 import { returnFromTerminal, handleTerminalMessage } from '/static/pages/terminal.js';
@@ -80,7 +80,7 @@ function _cancelActiveRestore(reason, navParams = {}) {
 const _listDeploymentsForBackup = async (params) => {
         const { updateStatusDisplay } = params;
         updateStatusDisplay('fetching deployments...', 'info');
-        const vms = await fetchSites();
+        const vms = await fetchMachines();
         let deployments = [];
         let emptyMessage = 'No deployments found.';
 
@@ -225,7 +225,7 @@ const _selectMachineForRestore = async (params) => {
         return;
     }
         updateStatusDisplay('fetching machines...', 'info');
-        const machines = await fetchSites(); 
+        const machines = await fetchMachines(); 
         
         // Filter out the 'no-deployments' placeholder if it exists
         lastFetchedMachines = machines.filter(m => m.id !== 'no-deployments');
@@ -529,7 +529,6 @@ async function _communicateRestore(ws, params) {
     }
 
     function handleRestoreCompleteEvent(payload) {
-        const machineId = payload.machine_id;
         const deploymentName = payload.deployment_name;
         const promptConfig = {
             id: 'restore-complete-prompt',
@@ -546,12 +545,11 @@ async function _communicateRestore(ws, params) {
                 ws.close();
             }
 
-            if (result && result.status === 'answered' && result.value === 'view_resource' && machineId && deploymentName) {
-                console.log(`Transitioning to view site: ${deploymentName} on ${machineId}`);
+            if (result && result.status === 'answered' && result.value === 'view_resource' && deploymentName) {
+                console.log(`Transitioning to view site: ${deploymentName}`);
                 _cancelActiveRestore('view_resource', { 
                     specialNav: 'viewSite', 
-                    machineId: machineId,
-                    deploymentName: deploymentName
+                    id: deploymentName
                 });
             } else {
                 // User clicked OK. Leave them in the terminal.
@@ -579,7 +577,7 @@ const _showScheduleMenu = async (params) => {
     const { updateStatusDisplay } = params;
     window.dispatchEvent(new CustomEvent('deploymentstatechange', { detail: { isActive: true } }));
         updateStatusDisplay('fetching deployments...', 'info');
-        const vms = await fetchSites({ include_schedule: true });
+        const vms = await fetchMachines({ include_schedule: true });
         let deployments = [];
         let emptyMessage = 'No deployments found.';
 

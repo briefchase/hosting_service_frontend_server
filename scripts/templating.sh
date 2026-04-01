@@ -17,6 +17,7 @@ template_files() {
     local active_client_id="$CFG_GOOGLE_CLIENT_ID"
     local active_api_url="$CFG_API_BASE_URL"
     local active_log_level="$CFG_LOG_LEVEL"
+    local active_grapes_license="$CFG_GRAPESJS_STUDIO_LICENSE"
     
     echo "Generating dynamic config.js for $deployment_type deployment in $target_dir..." >&2
     
@@ -30,7 +31,8 @@ template_files() {
 export const CONFIG = {
     GOOGLE_CLIENT_ID: "$active_client_id",
     API_BASE_URL: "$active_api_url",
-    LOG_LEVEL: "$active_log_level"
+    LOG_LEVEL: "$active_log_level",
+    GRAPESJS_STUDIO_LICENSE: "$active_grapes_license"
 };
 EOF
 

@@ -136,7 +136,8 @@ async function initializeApp() {
         import('/static/menus/usage.js'),
         import('/static/menus/subscription.js'),
         import('/static/menus/backup.js'),
-        import('/static/menus/account.js')
+        import('/static/menus/account.js'),
+        import('/static/pages/editor.js')
     ]);
 
     // Register the service worker
@@ -339,11 +340,10 @@ export async function loadConsoleView(param) {
 
     // logic for special navigation
     if (param && typeof param === 'object' && param.specialNav === 'viewSite') {
-        if (param.machineId && param.deploymentName) {
+        if (param.id) {
             const { viewSite } = await import('/static/menus/site.js');
             await viewSite({ 
-                machineId: param.machineId, 
-                deploymentName: param.deploymentName 
+                id: param.id
             });
         }
         return; // Stop further processing to prevent default menu render

@@ -1,7 +1,7 @@
 import { menus, renderMenu, updateStatusDisplay } from '/static/pages/menu.js';
 import { registerHandler } from '../scripts/registry.js';
 import { requireAuthAndSubscription } from '/static/scripts/authenticate.js';
-import { fetchSites as apiFetchSites } from '/static/scripts/api.js';
+import { fetchMachines } from '/static/scripts/api.js';
 import { CONFIG } from '/static/config.js';
 import {
     fetchWithAuth,
@@ -44,8 +44,7 @@ function generateMachineDetailsMenu(vm) {
                 text: d.deployment_name,
                 type: 'record',
                 action: 'viewSite',
-                machineId: vm.id,
-                deploymentName: d.deployment_name
+                id: d.deployment_name // Pass the clean name as id
             });
         });
     } else {
@@ -99,8 +98,7 @@ function generateMachineDetailsMenu(vm) {
 }
 
 async function fetchAndProcessMachines() {
-    // The `fetchSites` utility actually returns the VM-centric structure.
-    return await apiFetchSites();
+    return await fetchMachines();
 }
 
 function cacheAllMachineMenus(vms) {

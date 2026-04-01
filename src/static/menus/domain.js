@@ -12,7 +12,8 @@ const API_BASE_URL = CONFIG.API_BASE_URL;
 import { requireAuthAndSubscription, requireAuth, getUser } from '/static/scripts/authenticate.js';
 import { prompt } from '/static/pages/prompt.js';
 import { 
-    fetchSites, 
+    fetchState, 
+    fetchMachines,
     relinkDomain as relinkDomainApi, 
     purchaseDomain as apiPurchaseDomain, 
     fetchDomainRecords,
@@ -251,23 +252,45 @@ export const relinkDomain = requireAuth(async (params) => {
 
     // 1. Fetch all deployments to present as choices or for IP lookup
     updateStatusDisplay('fetching available deployments...', 'info');
-    const sitesData = await fetchSites();
-    if (!sitesData || sitesData.length === 0 || (sitesData.length === 1 && sitesData[0].id === 'no-deployments')) {
+    const state = await fetchState();
+    const { compute, firebase } = state;
+    
+    if ((!compute || compute.length === 0) && (!firebase || firebase.length === 0)) {
         updateStatusDisplay('No deployments available.', 'error');
         return;
     }
 
     const allDeploymentsRaw = [];
-    sitesData.forEach(vm => {
-        if (vm.deployments && vm.deployments.length > 0) {
-            allDeploymentsRaw.push(...vm.deployments.map(dep => ({
-                ...dep,
-                machine_name: vm.name,
-                machine_id: vm.id,
-                ip_address: vm.ip_address
-            })));
-        }
-    });
+    
+    // Process Compute (VM) deployments
+    if (Array.isArray(compute)) {
+        compute.forEach(vm => {
+            if (vm.deployments && vm.deployments.length > 0) {
+                allDeploymentsRaw.push(...vm.deployments.map(dep => ({
+                    ...dep,
+                    machine_name: vm.name,
+                    machine_id: vm.id,
+                    ip_address: vm.ip_address,
+                    infrastructure: 'vm'
+                })));
+            }
+        });
+    }
+
+    // Process Firebase deployments
+    if (Array.isArray(firebase)) {
+        firebase.forEach(site => {
+            allDeploymentsRaw.push({
+                deployment_name: site.site_id,
+                domain: site.domains && site.domains.length > 0 ? site.domains[0] : null,
+                machine_name: 'Firebase Hosting',
+                machine_id: 'firebase',
+                ip_address: null,
+                infrastructure: 'firebase',
+                wordpress: false
+            });
+        });
+    }
 
     // Find the deployment this domain is currently linked to
     const currentDeployment = allDeploymentsRaw.find(dep => dep.domain === domainName);
