@@ -237,6 +237,30 @@ deploy() {
         return 1
     }
 
+    #======================================
+    # GrapesJS Studio SDK Build Step
+    #======================================
+    local website_dir="$_DEPLOY_SCRIPT_DIR/.."
+    echo "Building GrapesJS Studio SDK bundle..." >&2
+    if [ -f "$website_dir/package.json" ]; then
+        # Ensure local dependencies are installed
+        ( cd "$website_dir" && npm install ) || { echo "Error: npm install failed." >&2; return 1; }
+        
+        if [ "$deployment_type" == "local" ]; then
+            echo "Performing initial SDK build..." >&2
+            ( cd "$website_dir" && npm run build:sdk ) || { echo "Error: Initial SDK build failed." >&2; return 1; }
+            
+            echo "Starting SDK watcher in background..." >&2
+            ( cd "$website_dir" && npm run watch:sdk ) &
+        else
+            echo "Running production SDK build..." >&2
+            ( cd "$website_dir" && npm run build:sdk ) || { echo "Error: Failed to build SDK bundle." >&2; return 1; }
+        fi
+        echo "SDK build process completed/initialized." >&2
+    else
+        echo "Warning: package.json not found, skipping SDK build." >&2
+    fi
+
     if [ "$deployment_type" == "local" ]; then
         local active_port="${CFG_LOCAL_HTTP_PORT:-5000}"
         echo "Starting local Firebase emulator on port $active_port..."

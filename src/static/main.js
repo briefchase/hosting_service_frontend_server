@@ -196,6 +196,9 @@ async function initializeApp() {
     setupMobileFixes();
 }
 
+// Global helper to bypass esbuild's dynamic import hijacking
+window.importModule = (path) => import(path);
+
 /**
  * Sets up CSS variables and listeners to fix common mobile layout issues.
  */

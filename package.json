@@ -1,0 +1,19 @@
+{
+  "name": "website",
+  "version": "1.0.0",
+  "description": "GrapesJS Studio SDK Integration",
+  "main": "src/static/main.js",
+  "dependencies": {
+    "@grapesjs/studio-sdk": "latest",
+    "@grapesjs/studio-sdk-plugins": "latest",
+    "react": "18.2.0",
+    "react-dom": "18.2.0"
+  },
+  "devDependencies": {
+    "esbuild": "latest"
+  },
+  "scripts": {
+    "build:sdk": "esbuild src/bundler/sdk-loader.js --bundle --sourcemap --outfile=src/static/pages/sdk.bundle.js --loader:.css=css --loader:.png=file --loader:.svg=file --format=iife --global-name=StudioSDK --define:process.env.NODE_ENV='\"development\"'",
+    "watch:sdk": "esbuild src/bundler/sdk-loader.js --bundle --sourcemap --outfile=src/static/pages/sdk.bundle.js --loader:.css=css --loader:.png=file --loader:.svg=file --format=iife --global-name=StudioSDK --watch=forever --define:process.env.NODE_ENV='\"development\"'"
+  }
+}

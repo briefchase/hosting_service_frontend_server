@@ -86,6 +86,17 @@ check_nodejs() {
     echo "Node.js and npm were installed successfully."
 }
 
+# Function to check and install local NPM dependencies
+check_npm_deps() {
+    local website_dir="$_INSTALL_SCRIPT_DIR/.."
+    if [ -f "$website_dir/package.json" ]; then
+        echo "Installing local NPM dependencies in $website_dir..."
+        ( cd "$website_dir" && npm install ) || { echo "Error: npm install failed." >&2; return 1; }
+        echo "Local NPM dependencies installed successfully."
+    fi
+    return 0
+}
+
 # Function to check and install Firebase CLI
 check_firebase_cli() {
     if command -v firebase &>/dev/null; then

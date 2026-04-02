@@ -34,3 +34,5 @@ app/__pycache__/
 # OS-specific files
 .DS_Store
 Thumbs.db
+src/static/pages/sdk.bundle.*
+src/static/pages/editor.bundle.*
