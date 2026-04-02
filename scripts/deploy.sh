@@ -144,13 +144,13 @@ prepare_deployment() {
         echo "Creating obfuscated version of $src_dir in $public_dir..."
         mkdir -p "$public_dir"
         obfuscate_src "$src_dir" "$public_dir" || return 1
-        # 3. Generate the dynamic config.js directly into public/static/
+        # 3. Generate the dynamic config.js directly into public/js/
         template_files "$deployment_type" "$public_dir" "y" || return 1
     else
         # For local, use a symlink to src for live updates
         echo "Creating symlink from $src_dir to $public_dir for live updates..."
         ln -s "$src_dir" "$public_dir"
-        # 3. Generate the dynamic config.js directly into src/static/
+        # 3. Generate the dynamic config.js directly into src/js/
         # This ensures the emulator sees the correct local config
         template_files "$deployment_type" "$src_dir" "y" || return 1
     fi

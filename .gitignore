@@ -10,8 +10,8 @@ app/traefik/traefik.toml
 app/traefik/dynamic/force-https.toml
 app/.env
 app/gcr-key.json
-src/static/config.js
-src/static/scripts/config.js
+src/js/config.js
+src/js/scripts/config.js
 
 # Terraform state, variables, and working directory
 .terraform/
@@ -34,5 +34,4 @@ app/__pycache__/
 # OS-specific files
 .DS_Store
 Thumbs.db
-src/static/pages/sdk.bundle.*
-src/static/pages/editor.bundle.*
+src/build/

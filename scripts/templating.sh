@@ -21,11 +21,11 @@ template_files() {
     
     echo "Generating dynamic config.js for $deployment_type deployment in $target_dir..." >&2
     
-    # Ensure the static directory exists in the target
-    mkdir -p "$target_dir/static"
+    # Ensure the js directory exists in the target
+    mkdir -p "$target_dir/js"
     
     # Write the config.js file directly to the target directory
-    cat <<EOF > "$target_dir/static/config.js"
+    cat <<EOF > "$target_dir/js/config.js"
 // This file is dynamically generated during deployment.
 // Do not modify it directly in the build directory.
 export const CONFIG = {
