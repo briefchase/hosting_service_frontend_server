@@ -35,3 +35,7 @@ app/__pycache__/
 .DS_Store
 Thumbs.db
 src/build/
+
+# Dependencies
+node_modules/
+.npm/
